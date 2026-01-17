@@ -29,10 +29,9 @@ export type RigListItem = {
   price: bigint;
   ups: bigint;
   unitPrice: bigint;
-  capacity: bigint;
-  totalMinted: bigint;
-  totalRevenue: bigint;
-  epochCount: number;
+  totalMinted: bigint; // Total minted (from subgraph)
+  totalRevenue: bigint; // Total spent/revenue (from subgraph)
+  epochCount: number; // Number of epochs (replaces mineCount)
   createdAt: number;
 };
 
@@ -147,7 +146,7 @@ export function useSearchRigs(searchQuery: string) {
   };
 }
 
-// Hook to get on-chain rig states for a list of addresses (slot 0)
+// Hook to get on-chain rig states for a list of addresses
 export function useRigStates(
   rigAddresses: `0x${string}`[],
   account: `0x${string}` | undefined
@@ -156,7 +155,7 @@ export function useRigStates(
     address: CONTRACT_ADDRESSES.multicall as `0x${string}`,
     abi: MULTICALL_ABI,
     functionName: "getRig" as const,
-    args: [address, 0n, account ?? zeroAddress] as const, // slot index 0
+    args: [address, account ?? zeroAddress] as const,
     chainId: base.id,
   }));
 
@@ -165,7 +164,7 @@ export function useRigStates(
     query: {
       enabled: rigAddresses.length > 0,
       refetchInterval: 30_000,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: false, // Prevent duplicate requests on tab focus
     },
   });
 
@@ -306,7 +305,6 @@ export function useExploreRigs(
           price: onChainState?.price ?? 0n,
           ups: onChainState?.nextUps ?? 0n,
           unitPrice: onChainState?.unitPrice ?? 0n,
-          capacity: onChainState?.capacity ?? 1n,
           totalMinted: 0n, // Not available without subgraph
           totalRevenue: 0n, // Not available without subgraph
           epochCount: 0, // Not available without subgraph
@@ -336,10 +334,9 @@ export function useExploreRigs(
           price: onChainState?.price ?? 0n,
           ups: onChainState?.nextUps ?? 0n,
           unitPrice: onChainState?.unitPrice ?? 0n,
-          capacity: onChainState?.capacity ?? 1n,
           totalMinted: BigInt(Math.floor(parseFloat(subgraphRig.minted) * 1e18)),
           totalRevenue: BigInt(Math.floor(parseFloat(subgraphRig.revenue) * 1e18)),
-          epochCount: parseInt(subgraphRig.capacity),
+          epochCount: parseInt(subgraphRig.epochId),
           createdAt: parseInt(subgraphRig.createdAt),
         };
       });

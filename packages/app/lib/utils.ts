@@ -1,59 +1,85 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-import { DEFAULT_ETH_PRICE_USD, DEFAULT_DONUT_PRICE_USD, PRICE_CACHE_TTL_MS } from "./constants"
+import { type ClassValue, clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
+import {
+  PRICE_CACHE_TTL_MS,
+  DEFAULT_ETH_PRICE_USD,
+  DEFAULT_DONUT_PRICE_USD,
+} from "./constants";
 
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  return twMerge(clsx(inputs));
 }
 
-// Price cache
-let ethPriceCache: { price: number; timestamp: number } | null = null;
-let donutPriceCache: { price: number; timestamp: number } | null = null;
+// Price cache - simple in-memory cache for client-side usage
+type PriceCache = {
+  price: number;
+  timestamp: number;
+};
 
-// DONUT token address on Base
-const DONUT_ADDRESS = "0xf8d8f925ff8cadd7b3e59bb609bba5a2b3ae908c";
+const priceCache: Record<string, PriceCache> = {};
 
-export async function getEthPrice(): Promise<number> {
-  // Check cache
-  if (ethPriceCache && Date.now() - ethPriceCache.timestamp < PRICE_CACHE_TTL_MS) {
-    return ethPriceCache.price;
+function getCachedPrice(key: string): number | null {
+  const cached = priceCache[key];
+  if (cached && Date.now() - cached.timestamp < PRICE_CACHE_TTL_MS) {
+    return cached.price;
   }
-
-  try {
-    const response = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
-      { next: { revalidate: 60 } }
-    );
-    const data = await response.json();
-    const price = data.ethereum?.usd ?? DEFAULT_ETH_PRICE_USD;
-    ethPriceCache = { price, timestamp: Date.now() };
-    return price;
-  } catch {
-    return ethPriceCache?.price ?? DEFAULT_ETH_PRICE_USD;
-  }
+  return null;
 }
 
-export async function getDonutPrice(): Promise<number> {
-  // Check cache
-  if (donutPriceCache && Date.now() - donutPriceCache.timestamp < PRICE_CACHE_TTL_MS) {
-    return donutPriceCache.price;
-  }
+function setCachedPrice(key: string, price: number): void {
+  priceCache[key] = { price, timestamp: Date.now() };
+}
 
+/**
+ * Fetches prices from our API route (which proxies CoinGecko)
+ * Returns cached value if available and fresh
+ */
+async function fetchPrices(): Promise<{ eth: number; donut: number }> {
   try {
-    // Try DexScreener first (more reliable for Base tokens)
-    const response = await fetch(
-      `https://api.dexscreener.com/latest/dex/tokens/${DONUT_ADDRESS}`,
-      { next: { revalidate: 60 } }
-    );
-    const data = await response.json();
-    const pair = data.pairs?.[0];
-    if (pair?.priceUsd) {
-      const price = parseFloat(pair.priceUsd);
-      donutPriceCache = { price, timestamp: Date.now() };
-      return price;
+    const response = await fetch("/api/prices");
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch prices: ${response.status}`);
     }
-    return donutPriceCache?.price ?? DEFAULT_DONUT_PRICE_USD;
-  } catch {
-    return donutPriceCache?.price ?? DEFAULT_DONUT_PRICE_USD;
+
+    const data = await response.json();
+    return {
+      eth: typeof data.eth === "number" ? data.eth : DEFAULT_ETH_PRICE_USD,
+      donut: typeof data.donut === "number" ? data.donut : DEFAULT_DONUT_PRICE_USD,
+    };
+  } catch (error) {
+    console.error("Error fetching prices:", error);
+    return {
+      eth: DEFAULT_ETH_PRICE_USD,
+      donut: DEFAULT_DONUT_PRICE_USD,
+    };
   }
+}
+
+/**
+ * Fetches the current ETH to USD price
+ * Returns cached value if available and fresh
+ */
+export async function getEthPrice(): Promise<number> {
+  const cached = getCachedPrice("eth");
+  if (cached !== null) return cached;
+
+  const prices = await fetchPrices();
+  setCachedPrice("eth", prices.eth);
+  setCachedPrice("donut", prices.donut);
+  return prices.eth;
+}
+
+/**
+ * Fetches the current DONUT to USD price
+ * Returns cached value if available and fresh
+ */
+export async function getDonutPrice(): Promise<number> {
+  const cached = getCachedPrice("donut");
+  if (cached !== null) return cached;
+
+  const prices = await fetchPrices();
+  setCachedPrice("eth", prices.eth);
+  setCachedPrice("donut", prices.donut);
+  return prices.donut;
 }

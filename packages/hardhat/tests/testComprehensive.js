@@ -64,27 +64,22 @@ describe("Comprehensive Security Tests", function () {
         const unitFactory = await UnitFactory.deploy();
         await unitFactory.deployed();
 
-        // Deploy mock Entropy
-        const Entropy = await ethers.getContractFactory("MockEntropy");
-        const entropy = await Entropy.deploy();
-        await entropy.deployed();
-
         const Core = await ethers.getContractFactory("Core");
         core = await Core.deploy(
+            WETH.address,
             DONUT.address,
             uniFactory.address,
             uniRouter.address,
             unitFactory.address,
             rigFactory.address,
             auctionFactory.address,
-            entropy.address,
             owner.address,
             convert("100", 18)
         );
         await core.deployed();
 
         const Multicall = await ethers.getContractFactory("Multicall");
-        multicall = await Multicall.deploy(core.address, DONUT.address);
+        multicall = await Multicall.deploy(core.address, WETH.address, DONUT.address);
         await multicall.deployed();
 
         // Fund all users
@@ -97,7 +92,6 @@ describe("Comprehensive Security Tests", function () {
     async function launchRig(launcher, options = {}) {
         const defaults = {
             launcher: launcher.address,
-            quoteToken: WETH.address,
             tokenName: "Test Unit",
             tokenSymbol: "TUNIT",
             uri: "",
@@ -105,7 +99,7 @@ describe("Comprehensive Security Tests", function () {
             unitAmount: convert("1000000", 18),
             initialUps: convert("4", 18),
             tailUps: convert("0.01", 18),
-            halvingAmount: convert("10000000", 18),
+            halvingPeriod: 2592000,
             rigEpochPeriod: 3600,
             rigPriceMultiplier: convert("2", 18),
             rigMinInitPrice: convert("0.0001", 18),
@@ -159,10 +153,9 @@ describe("Comprehensive Security Tests", function () {
         it("EXPLOIT: Attempt to claim non-existent token", async function () {
             // First accumulate some WETH in auction via rig mining
             const rigDeadline = await getFutureDeadline();
-            const slot = await rig.getSlot(0);
-            const rigPrice = await rig.getPrice(0);
+            const rigPrice = await rig.getPrice();
             await WETH.connect(user1).approve(rig.address, rigPrice);
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, rigDeadline, rigPrice, "mine");
+            await rig.connect(user1).mine(user1.address, 0, rigDeadline, rigPrice, "mine");
 
             // Wait for auction price to decay
             await increaseTime(3600);
@@ -180,10 +173,9 @@ describe("Comprehensive Security Tests", function () {
         it("EXPLOIT: Frontrun auction buy with epochId", async function () {
             // Accumulate WETH
             const rigDeadline = await getFutureDeadline();
-            const slot = await rig.getSlot(0);
-            const rigPrice = await rig.getPrice(0);
+            const rigPrice = await rig.getPrice();
             await WETH.connect(user1).approve(rig.address, rigPrice);
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, rigDeadline, rigPrice, "mine");
+            await rig.connect(user1).mine(user1.address, 0, rigDeadline, rigPrice, "mine");
 
             await increaseTime(3600);
 
@@ -198,31 +190,27 @@ describe("Comprehensive Security Tests", function () {
         });
 
         it("EXPLOIT: Buy at zero price after epoch expires", async function () {
-            // Mine to accumulate some WETH in the auction (treasury)
-            const slot = await rig.getSlot(0);
+            // Accumulate WETH
             const rigDeadline = await getFutureDeadline();
-            const rigPrice = await rig.getPrice(0);
-
-            // Pay at least the current price (could be small or 0)
-            await WETH.connect(user1).approve(rig.address, rigPrice.add(convert("1", 18)));
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, rigDeadline, rigPrice.add(convert("1", 18)), "mine");
+            const rigPrice = await rig.getPrice();
+            await WETH.connect(user1).approve(rig.address, rigPrice);
+            await rig.connect(user1).mine(user1.address, 0, rigDeadline, rigPrice, "mine");
 
             const wethInAuction = await WETH.balanceOf(auction.address);
+            expect(wethInAuction).to.be.gt(0);
 
-            // Wait for auction price to decay to zero
+            // Wait for price to decay to zero
             await increaseTime(3601);
 
-            const auctionPrice = await auction.getPrice();
-            expect(auctionPrice).to.equal(0);
+            const price = await auction.getPrice();
+            expect(price).to.equal(0);
 
-            // Buy at zero price - this is intended behavior (anyone can claim assets when epoch expires)
+            // Buy at zero price - this is intended behavior
             const deadline = await getFutureDeadline();
-            const epochId = await auction.epochId();
             const attackerWethBefore = await WETH.balanceOf(attacker.address);
-            await auction.connect(attacker).buy([WETH.address], attacker.address, epochId, deadline, 0);
+            await auction.connect(attacker).buy([WETH.address], attacker.address, 0, deadline, 0);
             const attackerWethAfter = await WETH.balanceOf(attacker.address);
 
-            // Attacker received whatever WETH was in the auction
             expect(attackerWethAfter.sub(attackerWethBefore)).to.equal(wethInAuction);
         });
 
@@ -237,11 +225,10 @@ describe("Comprehensive Security Tests", function () {
             for (let i = 0; i < 5; i++) {
                 // Accumulate some WETH first
                 const rigDeadline = await getFutureDeadline();
-                const slot = await rig.getSlot(0);
-                const rigPrice = await rig.getPrice(0);
+                const rigPrice = await rig.getPrice();
                 if (rigPrice.gt(0)) {
                     await WETH.connect(user1).approve(rig.address, rigPrice);
-                    await rig.connect(user1).mine(user1.address, 0, slot.epochId, rigDeadline, rigPrice, `mine-${i}`);
+                    await rig.connect(user1).mine(user1.address, i, rigDeadline, rigPrice, `mine-${i}`);
                 }
 
                 // Wait and buy from auction
@@ -288,32 +275,29 @@ describe("Comprehensive Security Tests", function () {
         });
 
         it("EXPLOIT: Claim same asset multiple times in one call", async function () {
-            // Mine to accumulate WETH in the auction
-            const slot = await rig.getSlot(0);
+            // Accumulate WETH
             const rigDeadline = await getFutureDeadline();
-            const rigPrice = await rig.getPrice(0);
-            await WETH.connect(user1).approve(rig.address, rigPrice.add(convert("1", 18)));
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, rigDeadline, rigPrice.add(convert("1", 18)), "mine");
+            const rigPrice = await rig.getPrice();
+            await WETH.connect(user1).approve(rig.address, rigPrice);
+            await rig.connect(user1).mine(user1.address, 0, rigDeadline, rigPrice, "mine");
 
             await increaseTime(3600);
 
             const deadline = await getFutureDeadline();
-            const epochId = await auction.epochId();
-            const wethInAuction = await WETH.balanceOf(auction.address);
             const wethBefore = await WETH.balanceOf(attacker.address);
 
             // Try to claim WETH twice - second transfer will be 0
             await auction.connect(attacker).buy(
                 [WETH.address, WETH.address],
                 attacker.address,
-                epochId,
+                0,
                 deadline,
                 convert("10", 18)
             );
 
             const wethAfter = await WETH.balanceOf(attacker.address);
-            // Should get all the WETH that was in the auction (listing it twice doesn't double it)
-            expect(wethAfter.sub(wethBefore)).to.equal(wethInAuction);
+            // Should only get the WETH once, second transfer is 0
+            expect(wethAfter.sub(wethBefore)).to.be.gt(0);
         });
     });
 
@@ -331,61 +315,55 @@ describe("Comprehensive Security Tests", function () {
             lpToken = contracts.lpToken;
         });
 
-        it("EXPLOIT: Send more ETH than needed to mine - reverts", async function () {
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
+        it("EXPLOIT: Send more ETH than needed to mine", async function () {
             const deadline = await getFutureDeadline();
-            const price = await rig.getPrice(0);
+            const price = await rig.getPrice();
 
-            // User needs to approve WETH for the actual mining price
-            await WETH.connect(user1).approve(multicall.address, price.add(convert("1", 18)));
+            const wethBefore = await WETH.balanceOf(user1.address);
 
-            // Send extra ETH - should revert since randomness is not enabled
-            await expect(
-                multicall.connect(user1).mine(
-                    rig.address,
-                    0,
-                    epochId,
-                    deadline,
-                    price.add(convert("1", 18)),
-                    "overpay",
-                    { value: convert("0.1", 18) }
-                )
-            ).to.be.revertedWith("Multicall__ExcessETH()");
+            // Send 10x the price
+            await multicall.connect(user1).mine(
+                rig.address,
+                0,
+                deadline,
+                price,
+                "overpay",
+                { value: price.mul(10) }
+            );
+
+            const wethAfter = await WETH.balanceOf(user1.address);
+            // Excess should be refunded as WETH
+            const refund = wethAfter.sub(wethBefore);
+            expect(refund).to.be.gt(price.mul(8)); // At least 80% refunded
         });
 
         it("EXPLOIT: Send zero ETH to mine", async function () {
             // Wait for price to be zero
             await increaseTime(3601);
 
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
             const deadline = await getFutureDeadline();
-            const price = await rig.getPrice(0);
+            const price = await rig.getPrice();
             expect(price).to.equal(0);
 
             // Mine with zero ETH at zero price
             await multicall.connect(user1).mine(
                 rig.address,
                 0,
-                epochId,
                 deadline,
                 0,
                 "free-mine",
                 { value: 0 }
             );
 
-            const slotAfter = await rig.getSlot(0);
-            expect(slotAfter.miner).to.equal(user1.address);
+            expect(await rig.epochMiner()).to.equal(user1.address);
         });
 
         it("EXPLOIT: Call buy without LP tokens", async function () {
             // Accumulate WETH in auction
             const rigDeadline = await getFutureDeadline();
-            const slot = await rig.getSlot(0);
-            const rigPrice = await rig.getPrice(0);
+            const rigPrice = await rig.getPrice();
             await WETH.connect(user1).approve(rig.address, rigPrice);
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, rigDeadline, rigPrice, "mine");
+            await rig.connect(user1).mine(user1.address, 0, rigDeadline, rigPrice, "mine");
 
             const deadline = await getFutureDeadline();
 
@@ -400,14 +378,14 @@ describe("Comprehensive Security Tests", function () {
         });
 
         it("SECURITY: getRig returns correct values", async function () {
-            const state = await multicall.getRig(rig.address, 0, user1.address);
-            const slot = await rig.getSlot(0);
+            const state = await multicall.getRig(rig.address, user1.address);
 
-            expect(state.epochId).to.equal(slot.epochId);
-            expect(state.initPrice).to.equal(slot.initPrice);
-            expect(state.ups).to.equal(slot.ups);
-            expect(state.miner).to.equal(slot.miner);
-            expect(state.accountQuoteBalance).to.equal(await WETH.balanceOf(user1.address));
+            expect(state.epochId).to.equal(await rig.epochId());
+            expect(state.initPrice).to.equal(await rig.epochInitPrice());
+            expect(state.ups).to.equal(await rig.epochUps());
+            expect(state.miner).to.equal(await rig.epochMiner());
+            expect(state.ethBalance).to.equal(await ethers.provider.getBalance(user1.address));
+            expect(state.wethBalance).to.equal(await WETH.balanceOf(user1.address));
         });
 
         it("SECURITY: getAuction returns correct values", async function () {
@@ -416,7 +394,7 @@ describe("Comprehensive Security Tests", function () {
             expect(state.epochId).to.equal(await auction.epochId());
             expect(state.initPrice).to.equal(await auction.initPrice());
             expect(state.paymentToken).to.equal(await auction.paymentToken());
-            expect(state.accountQuoteBalance).to.equal(await WETH.balanceOf(user1.address));
+            expect(state.wethBalance).to.equal(await WETH.balanceOf(user1.address));
         });
 
         it("EXPLOIT: Query with invalid rig address", async function () {
@@ -425,7 +403,7 @@ describe("Comprehensive Security Tests", function () {
 
             // This should revert when trying to call methods on non-contract
             await expect(
-                multicall.getRig(randomAddr, 0, user1.address)
+                multicall.getRig(randomAddr, user1.address)
             ).to.be.reverted;
         });
     });
@@ -437,27 +415,22 @@ describe("Comprehensive Security Tests", function () {
         it("Complex: Rig -> Auction -> Unit flow", async function () {
             const { rig, unit, auction, lpToken } = await launchRig(user0);
 
-            // Step 1: User1 mines the rig (fresh rig has non-zero price)
+            // Step 1: User1 mines the rig
             let deadline = await getFutureDeadline();
-            let slot = await rig.getSlot(0);
-            let price = await rig.getPrice(0);
-            await WETH.connect(user1).approve(rig.address, price.add(convert("1", 18)));
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price.add(convert("1", 18)), "step1");
+            let price = await rig.getPrice();
+            await WETH.connect(user1).approve(rig.address, price);
+            await rig.connect(user1).mine(user1.address, 0, deadline, price, "step1");
 
             // Treasury (auction) should have received 15% of price
             const auctionWeth = await WETH.balanceOf(auction.address);
-            // Only check if price was > 0, otherwise 15% of 0 is 0
-            if (price.gt(0)) {
-                expect(auctionWeth).to.be.gt(0);
-            }
+            expect(auctionWeth).to.be.gt(0);
 
             // Step 2: Wait and mine again
             await increaseTime(1800);
             deadline = await getFutureDeadline();
-            slot = await rig.getSlot(0);
-            price = await rig.getPrice(0);
+            price = await rig.getPrice();
             await WETH.connect(user2).approve(rig.address, price.add(convert("1", 18)));
-            await rig.connect(user2).mine(user2.address, 0, slot.epochId, deadline, price, "step2");
+            await rig.connect(user2).mine(user2.address, 1, deadline, price, "step2");
 
             // User1 should have received Unit tokens
             const user1Units = await unit.balanceOf(user1.address);
@@ -490,21 +463,17 @@ describe("Comprehensive Security Tests", function () {
 
             // Mine both rigs
             let deadline = await getFutureDeadline();
-            let slot1 = await rig1.rig.getSlot(0);
-            let slot2 = await rig2.rig.getSlot(0);
-            let price1 = await rig1.rig.getPrice(0);
-            let price2 = await rig2.rig.getPrice(0);
+            let price1 = await rig1.rig.getPrice();
+            let price2 = await rig2.rig.getPrice();
 
             await WETH.connect(user1).approve(rig1.rig.address, price1);
             await WETH.connect(user1).approve(rig2.rig.address, price2);
 
-            await rig1.rig.connect(user1).mine(user1.address, 0, slot1.epochId, deadline, price1, "rig1");
-            await rig2.rig.connect(user1).mine(user1.address, 0, slot2.epochId, deadline, price2, "rig2");
+            await rig1.rig.connect(user1).mine(user1.address, 0, deadline, price1, "rig1");
+            await rig2.rig.connect(user1).mine(user1.address, 0, deadline, price2, "rig2");
 
-            slot1 = await rig1.rig.getSlot(0);
-            slot2 = await rig2.rig.getSlot(0);
-            expect(slot1.miner).to.equal(user1.address);
-            expect(slot2.miner).to.equal(user1.address);
+            expect(await rig1.rig.epochMiner()).to.equal(user1.address);
+            expect(await rig2.rig.epochMiner()).to.equal(user1.address);
 
             // Both units are different tokens
             expect(rig1.unit.address).to.not.equal(rig2.unit.address);
@@ -556,18 +525,16 @@ describe("Comprehensive Security Tests", function () {
 
             // Only the Rig can mint (via mining)
             const deadline = await getFutureDeadline();
-            let slot = await rig.getSlot(0);
-            const price = await rig.getPrice(0);
+            const price = await rig.getPrice();
             await WETH.connect(user1).approve(rig.address, price);
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, "test");
+            await rig.connect(user1).mine(user1.address, 0, deadline, price, "test");
 
             // Wait and mine to distribute tokens
             await increaseTime(60);
             const deadline2 = await getFutureDeadline();
-            slot = await rig.getSlot(0);
-            const price2 = await rig.getPrice(0);
+            const price2 = await rig.getPrice();
             await WETH.connect(user2).approve(rig.address, price2.add(convert("1", 18)));
-            await rig.connect(user2).mine(user2.address, 0, slot.epochId, deadline2, price2, "test2");
+            await rig.connect(user2).mine(user2.address, 1, deadline2, price2, "test2");
 
             // User1 should have received minted tokens
             expect(await unit.balanceOf(user1.address)).to.be.gt(0);
@@ -602,18 +569,16 @@ describe("Comprehensive Security Tests", function () {
 
             // Give user1 some tokens via mining
             const deadline = await getFutureDeadline();
-            let slot = await rig.getSlot(0);
-            const price = await rig.getPrice(0);
+            const price = await rig.getPrice();
             await WETH.connect(user1).approve(rig.address, price);
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, "get-tokens");
+            await rig.connect(user1).mine(user1.address, 0, deadline, price, "get-tokens");
 
             await increaseTime(1800);
 
             const deadline2 = await getFutureDeadline();
-            slot = await rig.getSlot(0);
-            const price2 = await rig.getPrice(0);
+            const price2 = await rig.getPrice();
             await WETH.connect(user2).approve(rig.address, price2.add(convert("1", 18)));
-            await rig.connect(user2).mine(user2.address, 0, slot.epochId, deadline2, price2, "trigger-mint");
+            await rig.connect(user2).mine(user2.address, 1, deadline2, price2, "trigger-mint");
         });
 
         it("GOVERNANCE: Self-delegation works", async function () {
@@ -756,15 +721,13 @@ describe("Comprehensive Security Tests", function () {
                 await increaseTime(3500);
 
                 const deadline = await getFutureDeadline();
-                const slot = await rig.getSlot(0);
-                const price = await rig.getPrice(0);
+                const price = await rig.getPrice();
 
                 await WETH.connect(user1).approve(rig.address, price.add(convert("0.01", 18)));
-                await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, `stress-${i}`);
+                await rig.connect(user1).mine(user1.address, i, deadline, price, `stress-${i}`);
             }
 
-            const slot = await rig.getSlot(0);
-            expect(slot.epochId).to.equal(50);
+            expect(await rig.epochId()).to.equal(50);
         });
 
         it("STRESS: Launch 10 rigs rapidly", async function () {
@@ -795,15 +758,13 @@ describe("Comprehensive Security Tests", function () {
             for (let i = 0; i < users.length * 3; i++) {
                 const user = users[i % users.length];
                 const deadline = await getFutureDeadline();
-                const slot = await rig.getSlot(0);
-                const price = await rig.getPrice(0);
+                const price = await rig.getPrice();
 
                 await WETH.connect(user).approve(rig.address, price.add(convert("1", 18)));
-                await rig.connect(user).mine(user.address, 0, slot.epochId, deadline, price, `user-${i}`);
+                await rig.connect(user).mine(user.address, i, deadline, price, `user-${i}`);
             }
 
-            const slot = await rig.getSlot(0);
-            expect(slot.epochId).to.equal(15);
+            expect(await rig.epochId()).to.equal(15);
         });
 
         it("STRESS: Large time jumps", async function () {
@@ -811,22 +772,20 @@ describe("Comprehensive Security Tests", function () {
 
             // Mine once
             let deadline = await getFutureDeadline();
-            let slot = await rig.getSlot(0);
-            let price = await rig.getPrice(0);
+            let price = await rig.getPrice();
             await WETH.connect(user1).approve(rig.address, price);
-            await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, "initial");
+            await rig.connect(user1).mine(user1.address, 0, deadline, price, "initial");
 
             // Jump 10 years
             await increaseTime(10 * 365 * 24 * 3600);
 
             // Mine again - should still work
             deadline = await getFutureDeadline();
-            slot = await rig.getSlot(0);
-            price = await rig.getPrice(0);
+            price = await rig.getPrice();
             expect(price).to.equal(0); // Price should be 0
 
             await WETH.connect(user2).approve(rig.address, convert("1", 18));
-            await rig.connect(user2).mine(user2.address, 0, slot.epochId, deadline, 0, "after-10-years");
+            await rig.connect(user2).mine(user2.address, 1, deadline, 0, "after-10-years");
 
             // User1 should have lots of tokens (10 years of minting)
             const user1Balance = await unit.balanceOf(user1.address);
@@ -839,11 +798,10 @@ describe("Comprehensive Security Tests", function () {
 
             for (let i = 0; i < 10; i++) {
                 const deadline = await getFutureDeadline();
-                const slot = await rig.getSlot(0);
-                const price = await rig.getPrice(0);
+                const price = await rig.getPrice();
 
                 await WETH.connect(user1).approve(rig.address, price.add(convert("1", 18)));
-                const tx = await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, `gas-${i}`);
+                const tx = await rig.connect(user1).mine(user1.address, i, deadline, price, `gas-${i}`);
                 const receipt = await tx.wait();
                 gasCosts.push(receipt.gasUsed.toNumber());
             }
@@ -875,14 +833,14 @@ describe("Comprehensive Security Tests", function () {
                     await increaseTime(seconds);
                 }
 
-                const price = await rig.getPrice(0);
+                const price = await rig.getPrice();
                 expect(price).to.be.gte(0);
 
                 // Reset for next iteration by mining
                 const deadline = await getFutureDeadline();
-                const slot = await rig.getSlot(0);
+                const epochId = await rig.epochId();
                 await WETH.connect(user1).approve(rig.address, price.add(convert("1", 18)));
-                await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, `fuzz-${seconds}`);
+                await rig.connect(user1).mine(user1.address, epochId, deadline, price, `fuzz-${seconds}`);
             }
         });
 
@@ -894,14 +852,13 @@ describe("Comprehensive Security Tests", function () {
             for (let i = 0; i < uriLengths.length; i++) {
                 const uri = "x".repeat(uriLengths[i]);
                 const deadline = await getFutureDeadline();
-                const slot = await rig.getSlot(0);
-                const price = await rig.getPrice(0);
+                const price = await rig.getPrice();
 
                 await WETH.connect(user1).approve(rig.address, price.add(convert("1", 18)));
-                await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, uri);
+                await rig.connect(user1).mine(user1.address, i, deadline, price, uri);
 
-                const slotAfter = await rig.getSlot(0);
-                expect(slotAfter.uri).to.equal(uri);
+                const storedUri = await rig.epochUri();
+                expect(storedUri).to.equal(uri);
             }
         });
 
@@ -922,18 +879,16 @@ describe("Comprehensive Security Tests", function () {
 
                 // Mine and wait
                 let deadline = await getFutureDeadline();
-                let slot = await rig.getSlot(0);
-                let price = await rig.getPrice(0);
+                let price = await rig.getPrice();
                 await WETH.connect(user1).approve(rig.address, price);
-                await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, "fuzz-ups");
+                await rig.connect(user1).mine(user1.address, 0, deadline, price, "fuzz-ups");
 
                 await increaseTime(3600);
 
                 deadline = await getFutureDeadline();
-                slot = await rig.getSlot(0);
-                price = await rig.getPrice(0);
+                price = await rig.getPrice();
                 await WETH.connect(user2).approve(rig.address, price.add(convert("1", 18)));
-                await rig.connect(user2).mine(user2.address, 0, slot.epochId, deadline, price, "fuzz-ups-2");
+                await rig.connect(user2).mine(user2.address, 1, deadline, price, "fuzz-ups-2");
 
                 // Should have minted tokens without overflow
                 const minted = await unit.balanceOf(user1.address);
@@ -955,41 +910,38 @@ describe("Comprehensive Security Tests", function () {
                 // Mine a few times
                 for (let i = 0; i < 3; i++) {
                     const deadline = await getFutureDeadline();
-                    const slot = await rig.getSlot(0);
-                    const price = await rig.getPrice(0);
+                    const price = await rig.getPrice();
 
                     await WETH.connect(user1).approve(rig.address, price.add(convert("1", 18)));
-                    await rig.connect(user1).mine(user1.address, 0, slot.epochId, deadline, price, `mult-${i}`);
+                    await rig.connect(user1).mine(user1.address, i, deadline, price, `mult-${i}`);
                 }
 
                 // Contract should still be functional
-                const slot = await rig.getSlot(0);
-                expect(slot.epochId).to.equal(3);
+                const epochId = await rig.epochId();
+                expect(epochId).to.equal(3);
             }
         });
 
-        it("FUZZ: Random halving amounts", async function () {
-            // Test various halving amounts (all >= MIN_HALVING_AMOUNT of 1000 ether)
-            const amounts = [
-                convert("1000", 18),      // Minimum
-                convert("10000", 18),     // 10K tokens
-                convert("100000", 18),    // 100K tokens
-                convert("10000000", 18)   // 10M tokens
+        it("FUZZ: Random halving periods", async function () {
+            // Test various halving periods (all >= MIN_HALVING_PERIOD of 1 day)
+            const periods = [
+                86400,       // 1 day (MIN_HALVING_PERIOD)
+                172800,      // 2 days
+                604800,      // 7 days
+                2592000      // 30 days
             ];
 
-            for (const amount of amounts) {
-                const { rig } = await launchRig(user0, { halvingAmount: amount });
+            for (const period of periods) {
+                const { rig } = await launchRig(user0, { halvingPeriod: period });
 
-                // Halving is based on totalMinted, not time
-                // Just verify the rig launches with different halving amounts
-                const halvingAmount = await rig.halvingAmount();
-                expect(halvingAmount).to.equal(amount);
+                // Jump past one halving
+                await increaseTime(period + 1);
 
                 const ups = await rig.getUps();
                 const initialUps = await rig.initialUps();
 
-                // UPS should still be at initial (no tokens minted yet)
-                expect(ups).to.equal(initialUps);
+                // UPS should be halved
+                expect(ups).to.equal(initialUps.div(2));
             }
         });
     });

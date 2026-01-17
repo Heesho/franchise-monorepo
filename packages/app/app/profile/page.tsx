@@ -1,62 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { formatEther } from "viem";
 import { User, Pickaxe, Rocket } from "lucide-react";
+
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { NavBar } from "@/components/nav-bar";
-
-// Mock user data
-const MOCK_USER = {
-  name: "vitalik.eth",
-  avatar: null,
-  totalValue: 1234.56,
-  change24h: 5.4,
-};
-
-// Mock portfolio holdings
-const MOCK_HOLDINGS = [
-  {
-    address: "0x1234",
-    name: "Donut",
-    symbol: "DONUT",
-    amount: 15000,
-    value: 450.5,
-    change24h: 12.5,
-    color: "from-amber-500 to-orange-600",
-  },
-  {
-    address: "0x2345",
-    name: "Moon Token",
-    symbol: "MOON",
-    amount: 500,
-    value: 320.0,
-    change24h: -3.2,
-    color: "from-purple-500 to-violet-600",
-  },
-  {
-    address: "0x3456",
-    name: "Fire Token",
-    symbol: "FIRE",
-    amount: 10000,
-    value: 245.0,
-    change24h: 45.8,
-    color: "from-orange-500 to-red-600",
-  },
-];
-
-// Mock launched tokens
-const MOCK_LAUNCHED = [
-  {
-    address: "0x4567",
-    name: "My First Token",
-    symbol: "MFT",
-    marketCap: 12500,
-    holders: 34,
-    color: "from-blue-500 to-cyan-500",
-  },
-];
+import { useFarcaster, getUserDisplayName, getUserHandle, initialsFrom } from "@/hooks/useFarcaster";
+import { useUserProfile, type UserRigData, type UserLaunchedRig } from "@/hooks/useUserProfile";
+import { getDonutPrice } from "@/lib/utils";
+import { DEFAULT_DONUT_PRICE_USD, PRICE_REFETCH_INTERVAL_MS, ipfsToHttp } from "@/lib/constants";
 
 type TabOption = "holdings" | "launched";
+
+const formatTokenAmount = (value: bigint, maximumFractionDigits = 2) => {
+  if (value === 0n) return "0";
+  const asNumber = Number(formatEther(value));
+  if (!Number.isFinite(asNumber)) {
+    return formatEther(value);
+  }
+  return asNumber.toLocaleString(undefined, {
+    maximumFractionDigits,
+  });
+};
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -72,18 +39,161 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString();
 }
 
-function TokenLogo({ name, color }: { name: string; color: string }) {
+function TokenLogo({ name, logoUrl }: { name: string; logoUrl: string | null }) {
+  if (logoUrl) {
+    return (
+      <img
+        src={logoUrl}
+        alt={name}
+        className="w-10 h-10 rounded-full object-cover"
+      />
+    );
+  }
   return (
-    <div
-      className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold bg-gradient-to-br ${color} text-white`}
-    >
+    <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold bg-zinc-700 text-white">
       {name.charAt(0)}
     </div>
   );
 }
 
+function MinedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserRigData; donutUsdPrice: number; isLast: boolean }) {
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!rig.rigUri) return;
+    const metadataUrl = ipfsToHttp(rig.rigUri);
+    if (!metadataUrl) return;
+
+    fetch(metadataUrl)
+      .then((res) => res.json())
+      .then((metadata) => {
+        if (metadata.image) {
+          setLogoUrl(ipfsToHttp(metadata.image));
+        }
+      })
+      .catch(() => {});
+  }, [rig.rigUri]);
+
+  // Calculate value: userMined * unitPrice (in DONUT) * donutUsdPrice
+  const minedAmount = Number(formatEther(rig.userMined));
+  const unitPriceDonut = rig.unitPrice ? Number(formatEther(rig.unitPrice)) : 0;
+  const valueUsd = minedAmount * unitPriceDonut * donutUsdPrice;
+
+  // Calculate PnL in ETH
+  const pnlEth = Number(formatEther(rig.userEarned - rig.userSpent));
+
+  return (
+    <Link
+      href={`/rig/${rig.address}`}
+      className="grid grid-cols-[auto_1fr_auto] items-center gap-3 py-4 transition-colors hover:bg-white/[0.02]"
+      style={{
+        borderBottom: !isLast ? "1px solid rgba(255,255,255,0.06)" : "none",
+      }}
+    >
+      <TokenLogo name={rig.tokenName} logoUrl={logoUrl} />
+      <div>
+        <div className="font-semibold text-[15px]">{rig.tokenSymbol}</div>
+        <div className="text-[13px] text-muted-foreground">
+          {formatAmount(minedAmount)} mined
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="font-medium text-[15px] tabular-nums">
+          {formatCurrency(valueUsd)}
+        </div>
+        <div className={`text-[13px] tabular-nums ${pnlEth >= 0 ? "text-zinc-400" : "text-zinc-500"}`}>
+          {pnlEth >= 0 ? "+" : ""}{pnlEth.toFixed(4)} ETH
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function LaunchedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserLaunchedRig; donutUsdPrice: number; isLast: boolean }) {
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!rig.rigUri) return;
+    const metadataUrl = ipfsToHttp(rig.rigUri);
+    if (!metadataUrl) return;
+
+    fetch(metadataUrl)
+      .then((res) => res.json())
+      .then((metadata) => {
+        if (metadata.image) {
+          setLogoUrl(ipfsToHttp(metadata.image));
+        }
+      })
+      .catch(() => {});
+  }, [rig.rigUri]);
+
+  // Calculate market cap: totalMinted * unitPrice (in DONUT) * donutUsdPrice
+  const marketCapUsd = rig.unitPrice > 0n
+    ? Number(formatEther(rig.totalMinted)) * Number(formatEther(rig.unitPrice)) * donutUsdPrice
+    : 0;
+
+  const revenueEth = Number(formatEther(rig.revenue));
+
+  const formatMarketCap = (value: number) => {
+    if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+    if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+    return `$${value.toFixed(2)}`;
+  };
+
+  return (
+    <Link
+      href={`/rig/${rig.address}`}
+      className="grid grid-cols-[auto_1fr_auto] items-center gap-3 py-4 transition-colors hover:bg-white/[0.02]"
+      style={{
+        borderBottom: !isLast ? "1px solid rgba(255,255,255,0.06)" : "none",
+      }}
+    >
+      <TokenLogo name={rig.tokenName} logoUrl={logoUrl} />
+      <div>
+        <div className="font-semibold text-[15px]">{rig.tokenSymbol}</div>
+        <div className="text-[13px] text-muted-foreground">
+          {rig.tokenName}
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="font-medium text-[15px] tabular-nums">
+          {formatMarketCap(marketCapUsd)}
+        </div>
+        <div className="text-[13px] text-muted-foreground">
+          {revenueEth.toFixed(4)} ETH earned
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 export default function ProfilePage() {
   const [activeTab, setActiveTab] = useState<TabOption>("holdings");
+  const [donutUsdPrice, setDonutUsdPrice] = useState<number>(DEFAULT_DONUT_PRICE_USD);
+
+  const { user, address } = useFarcaster();
+  const { minedRigs, launchedRigs, isLoading } = useUserProfile(address);
+
+  // Fetch DONUT price
+  useEffect(() => {
+    const fetchPrice = async () => {
+      const price = await getDonutPrice();
+      setDonutUsdPrice(price);
+    };
+    fetchPrice();
+    const interval = setInterval(fetchPrice, PRICE_REFETCH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  const userDisplayName = getUserDisplayName(user);
+  const userAvatarUrl = user?.pfpUrl ?? null;
+
+  // Calculate total portfolio value
+  const totalValue = minedRigs.reduce((acc, rig) => {
+    const minedAmount = Number(formatEther(rig.userMined));
+    const unitPriceDonut = rig.unitPrice ? Number(formatEther(rig.unitPrice)) : 0;
+    return acc + (minedAmount * unitPriceDonut * donutUsdPrice);
+  }, 0);
 
   return (
     <main className="flex h-screen w-screen justify-center bg-zinc-800">
@@ -100,11 +210,11 @@ export default function ProfilePage() {
 
           {/* User Info */}
           <div className="flex items-center gap-4 mb-6">
-            <div className="w-14 h-14 rounded-full bg-zinc-800 flex items-center justify-center">
-              {MOCK_USER.avatar ? (
+            <div className="w-14 h-14 rounded-full bg-zinc-800 flex items-center justify-center overflow-hidden">
+              {userAvatarUrl ? (
                 <img
-                  src={MOCK_USER.avatar}
-                  alt={MOCK_USER.name}
+                  src={userAvatarUrl}
+                  alt={userDisplayName}
                   className="w-full h-full rounded-full object-cover"
                 />
               ) : (
@@ -112,9 +222,9 @@ export default function ProfilePage() {
               )}
             </div>
             <div>
-              <div className="font-semibold text-[17px]">{MOCK_USER.name}</div>
+              <div className="font-semibold text-[17px]">{userDisplayName}</div>
               <div className="text-[13px] text-muted-foreground">
-                {MOCK_HOLDINGS.length} tokens held
+                {minedRigs.length} tokens held
               </div>
             </div>
           </div>
@@ -126,15 +236,7 @@ export default function ProfilePage() {
             </div>
             <div className="flex items-baseline gap-3">
               <span className="text-[32px] font-semibold tracking-tight tabular-nums">
-                {formatCurrency(MOCK_USER.totalValue)}
-              </span>
-              <span
-                className={`text-[14px] tabular-nums ${
-                  MOCK_USER.change24h >= 0 ? "text-zinc-400" : "text-zinc-500"
-                }`}
-              >
-                {MOCK_USER.change24h >= 0 ? "+" : ""}
-                {MOCK_USER.change24h.toFixed(2)}%
+                {formatCurrency(totalValue)}
               </span>
             </div>
           </div>
@@ -168,46 +270,34 @@ export default function ProfilePage() {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto scrollbar-hide px-4">
-          {activeTab === "holdings" ? (
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+              <p className="text-[15px]">Loading...</p>
+            </div>
+          ) : activeTab === "holdings" ? (
             <div>
-              {MOCK_HOLDINGS.map((holding, index) => (
-                <Link
-                  key={holding.address}
-                  href={`/rig/${holding.address}`}
-                  className="grid grid-cols-[auto_1fr_auto] items-center gap-3 py-4 transition-colors hover:bg-white/[0.02]"
-                  style={{
-                    borderBottom:
-                      index < MOCK_HOLDINGS.length - 1
-                        ? "1px solid rgba(255,255,255,0.06)"
-                        : "none",
-                  }}
-                >
-                  <TokenLogo name={holding.name} color={holding.color} />
-                  <div>
-                    <div className="font-semibold text-[15px]">{holding.symbol}</div>
-                    <div className="text-[13px] text-muted-foreground">
-                      {formatAmount(holding.amount)} tokens
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-medium text-[15px] tabular-nums">
-                      {formatCurrency(holding.value)}
-                    </div>
-                    <div
-                      className={`text-[13px] tabular-nums ${
-                        holding.change24h >= 0 ? "text-zinc-400" : "text-zinc-500"
-                      }`}
-                    >
-                      {holding.change24h >= 0 ? "+" : ""}
-                      {holding.change24h.toFixed(2)}%
-                    </div>
-                  </div>
-                </Link>
-              ))}
+              {minedRigs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                  <Pickaxe className="w-10 h-10 mb-3 opacity-30" />
+                  <p className="text-[15px] font-medium">No tokens mined yet</p>
+                  <p className="text-[13px] mt-1 opacity-70">
+                    Start mining to build your portfolio!
+                  </p>
+                </div>
+              ) : (
+                minedRigs.map((rig, index) => (
+                  <MinedRigRow
+                    key={rig.address}
+                    rig={rig}
+                    donutUsdPrice={donutUsdPrice}
+                    isLast={index === minedRigs.length - 1}
+                  />
+                ))
+              )}
             </div>
           ) : (
             <div>
-              {MOCK_LAUNCHED.length === 0 ? (
+              {launchedRigs.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                   <Rocket className="w-10 h-10 mb-3 opacity-30" />
                   <p className="text-[15px] font-medium">No tokens launched yet</p>
@@ -216,34 +306,13 @@ export default function ProfilePage() {
                   </p>
                 </div>
               ) : (
-                MOCK_LAUNCHED.map((token, index) => (
-                  <Link
-                    key={token.address}
-                    href={`/rig/${token.address}`}
-                    className="grid grid-cols-[auto_1fr_auto] items-center gap-3 py-4 transition-colors hover:bg-white/[0.02]"
-                    style={{
-                      borderBottom:
-                        index < MOCK_LAUNCHED.length - 1
-                          ? "1px solid rgba(255,255,255,0.06)"
-                          : "none",
-                    }}
-                  >
-                    <TokenLogo name={token.name} color={token.color} />
-                    <div>
-                      <div className="font-semibold text-[15px]">{token.symbol}</div>
-                      <div className="text-[13px] text-muted-foreground">
-                        {token.name}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-medium text-[15px] tabular-nums">
-                        ${(token.marketCap / 1000).toFixed(1)}K
-                      </div>
-                      <div className="text-[13px] text-muted-foreground">
-                        {token.holders} holders
-                      </div>
-                    </div>
-                  </Link>
+                launchedRigs.map((rig, index) => (
+                  <LaunchedRigRow
+                    key={rig.address}
+                    rig={rig}
+                    donutUsdPrice={donutUsdPrice}
+                    isLast={index === launchedRigs.length - 1}
+                  />
                 ))
               )}
             </div>

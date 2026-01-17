@@ -13,47 +13,46 @@ contract RigFactory {
     /**
      * @notice Deploy a new Rig contract.
      * @param _unit Unit token address (deployed separately by Core)
-     * @param _quote Payment token address (e.g., USDC)
-     * @param _entropy Pyth Entropy contract address
-     * @param _protocol Protocol fee recipient address
+     * @param _quote Payment token address (e.g., WETH)
      * @param _treasury Treasury address for fee collection
-     * @param _epochPeriod Duration of each Dutch auction epoch
+     * @param _team Team address for fee collection
+     * @param _core Core contract address
+     * @param _uri Metadata URI for the rig
+     * @param _initialUps Starting units per second
+     * @param _tailUps Minimum units per second
+     * @param _halvingPeriod Time between halvings
+     * @param _epochPeriod Duration of each epoch
      * @param _priceMultiplier Price multiplier for next epoch
      * @param _minInitPrice Minimum starting price
-     * @param _initialUps Starting units per second
-     * @param _halvingAmount Token supply threshold for halving
-     * @param _tailUps Minimum units per second
      * @return Address of the newly deployed Rig
      */
     function deploy(
         address _unit,
         address _quote,
-        address _entropy,
-        address _protocol,
         address _treasury,
+        address _team,
+        address _core,
+        string calldata _uri,
+        uint256 _initialUps,
+        uint256 _tailUps,
+        uint256 _halvingPeriod,
         uint256 _epochPeriod,
         uint256 _priceMultiplier,
-        uint256 _minInitPrice,
-        uint256 _initialUps,
-        uint256 _halvingAmount,
-        uint256 _tailUps
+        uint256 _minInitPrice
     ) external returns (address) {
-        Rig.Config memory config = Rig.Config({
-            epochPeriod: _epochPeriod,
-            priceMultiplier: _priceMultiplier,
-            minInitPrice: _minInitPrice,
-            initialUps: _initialUps,
-            halvingAmount: _halvingAmount,
-            tailUps: _tailUps
-        });
-
         Rig rig = new Rig(
             _unit,
             _quote,
-            _entropy,
-            _protocol,
             _treasury,
-            config
+            _team,
+            _core,
+            _uri,
+            _initialUps,
+            _tailUps,
+            _halvingPeriod,
+            _epochPeriod,
+            _priceMultiplier,
+            _minInitPrice
         );
         rig.transferOwnership(msg.sender);
         return address(rig);

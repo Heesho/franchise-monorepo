@@ -25,7 +25,6 @@ async function launchFreshRig(launcher, params = {}) {
   await ensureDonut(launcher, convert("20", 18));
   const defaultParams = {
     launcher: launcher.address,
-    quoteToken: weth.address,
     tokenName: "Test Unit",
     tokenSymbol: "TUNIT",
     uri: "",
@@ -33,7 +32,7 @@ async function launchFreshRig(launcher, params = {}) {
     unitAmount: convert("1000000", 18),
     initialUps: convert("4", 18),
     tailUps: convert("0.01", 18),
-    halvingAmount: convert("10000000", 18),
+    halvingPeriod: 86400 * 30,
     rigEpochPeriod: 3600,
     rigPriceMultiplier: convert("2", 18),
     rigMinInitPrice: convert("0.0001", 18),
@@ -64,23 +63,18 @@ async function getFutureDeadline() {
 }
 
 // Helper to mine a rig
-async function mineRig(rigAddress, miner, rigRecipient = null, index = 0) {
+async function mineRig(rigAddress, miner, rigRecipient = null) {
   const rigContract = await ethers.getContractAt("Rig", rigAddress);
-  const slot = await rigContract.getSlot(index);
-  const epochId = slot.epochId;
-  const price = await rigContract.getPrice(index);
+  const epochId = await rigContract.epochId();
+  const price = await rigContract.getPrice();
   const deadline = await getFutureDeadline();
 
-  // Ensure miner has enough WETH (quote token)
-  const balance = await weth.balanceOf(miner.address);
-  if (balance.lt(price.mul(2))) {
-    await weth.connect(miner).deposit({ value: convert("10", 18) });
-  }
+  await weth.connect(miner).deposit({ value: convert("10", 18) });
   await weth.connect(miner).approve(rigAddress, price.mul(2)); // Extra approval for safety
 
   const tx = await rigContract
     .connect(miner)
-    .mine(rigRecipient || miner.address, index, epochId, deadline, price.mul(2), "");
+    .mine(rigRecipient || miner.address, epochId, deadline, price.mul(2), "");
 
   return tx;
 }
@@ -117,27 +111,23 @@ describe("Business Logic Tests", function () {
     const unitFactoryArtifact = await ethers.getContractFactory("UnitFactory");
     const unitFactory = await unitFactoryArtifact.deploy();
 
-    // Deploy mock Entropy
-    const entropyArtifact = await ethers.getContractFactory("MockEntropy");
-    const entropy = await entropyArtifact.deploy();
-
     // Deploy Core
     const coreArtifact = await ethers.getContractFactory("Core");
     core = await coreArtifact.deploy(
+      weth.address,
       donut.address,
       uniswapFactory.address,
       uniswapRouter.address,
       unitFactory.address,
       rigFactory.address,
       auctionFactory.address,
-      entropy.address,
       protocol.address,
       convert("5", 18) // minDonutForLaunch (reduced for testing)
     );
 
     // Deploy Multicall
     const multicallArtifact = await ethers.getContractFactory("Multicall");
-    multicall = await multicallArtifact.deploy(core.address, donut.address);
+    multicall = await multicallArtifact.deploy(core.address, weth.address, donut.address);
 
     // Mint DONUT to users for launching (need enough for many rigs at 500 each)
     // Each user gets 100 ETH worth of DONUT for extensive testing
@@ -159,9 +149,8 @@ describe("Business Logic Tests", function () {
   describe("Rig Dutch Auction Price Mechanics", function () {
     it("Price starts at initPrice at epoch start", async function () {
       const rigContract = await ethers.getContractAt("Rig", rig);
-      const slot = await rigContract.getSlot(0);
-      const initPrice = slot.initPrice;
-      const currentPrice = await rigContract.getPrice(0);
+      const initPrice = await rigContract.epochInitPrice();
+      const currentPrice = await rigContract.getPrice();
 
       // Price should be close to initPrice (some time may have passed)
       expect(currentPrice).to.be.lte(initPrice);
@@ -172,15 +161,14 @@ describe("Business Logic Tests", function () {
       const result = await launchFreshRig(user1, { rigEpochPeriod: 3600 });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      const slot = await rigContract.getSlot(0);
-      const initPrice = slot.initPrice;
+      const initPrice = await rigContract.epochInitPrice();
       const epochPeriod = await rigContract.epochPeriod();
 
       // Check price at 25% through epoch
       await network.provider.send("evm_increaseTime", [900]); // 15 min = 25%
       await network.provider.send("evm_mine");
 
-      let price = await rigContract.getPrice(0);
+      let price = await rigContract.getPrice();
       let expectedPrice = initPrice.sub(initPrice.mul(900).div(epochPeriod));
       expect(price).to.be.closeTo(expectedPrice, expectedPrice.div(100)); // 1% tolerance
 
@@ -188,7 +176,7 @@ describe("Business Logic Tests", function () {
       await network.provider.send("evm_increaseTime", [900]); // another 15 min
       await network.provider.send("evm_mine");
 
-      price = await rigContract.getPrice(0);
+      price = await rigContract.getPrice();
       expectedPrice = initPrice.sub(initPrice.mul(1800).div(epochPeriod));
       expect(price).to.be.closeTo(expectedPrice, expectedPrice.div(100));
 
@@ -196,7 +184,7 @@ describe("Business Logic Tests", function () {
       await network.provider.send("evm_increaseTime", [900]);
       await network.provider.send("evm_mine");
 
-      price = await rigContract.getPrice(0);
+      price = await rigContract.getPrice();
       expectedPrice = initPrice.sub(initPrice.mul(2700).div(epochPeriod));
       expect(price).to.be.closeTo(expectedPrice, expectedPrice.div(100));
     });
@@ -209,7 +197,7 @@ describe("Business Logic Tests", function () {
       await network.provider.send("evm_increaseTime", [3700]);
       await network.provider.send("evm_mine");
 
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
       expect(price).to.equal(0);
     });
 
@@ -221,19 +209,17 @@ describe("Business Logic Tests", function () {
       await network.provider.send("evm_increaseTime", [3700]);
       await network.provider.send("evm_mine");
 
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       expect(price).to.equal(0);
 
       // Mine at zero price - no WETH needed
       const deadline = await getFutureDeadline();
       await rigContract
         .connect(user1)
-        .mine(user1.address, 0, epochId, deadline, 0, "");
+        .mine(user1.address, epochId, deadline, 0, "");
 
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(user1.address);
+      expect(await rigContract.epochMiner()).to.equal(user1.address);
     });
 
     it("Price multiplier correctly sets next epoch price", async function () {
@@ -244,22 +230,21 @@ describe("Business Logic Tests", function () {
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
       // Get initial price and mine
-      let slot = await rigContract.getSlot(0);
-      const initPriceBefore = slot.initPrice;
+      const initPriceBefore = await rigContract.epochInitPrice();
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(result.rig, convert("1", 18));
 
-      const epochId = slot.epochId;
-      const pricePaid = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const pricePaid = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
       await rigContract
         .connect(user1)
-        .mine(user1.address, 0, epochId, deadline, pricePaid, "");
+        .mine(user1.address, epochId, deadline, pricePaid, "");
 
       // New initPrice should be pricePaid * 2 (multiplier)
-      slot = await rigContract.getSlot(0);
-      const initPriceAfter = slot.initPrice;
+      const initPriceAfter = await rigContract.epochInitPrice();
       const expectedPrice = pricePaid.mul(convert("2", 18)).div(convert("1", 18));
 
       // Check if it's either the calculated price or minInitPrice (whichever is higher)
@@ -282,18 +267,16 @@ describe("Business Logic Tests", function () {
       await network.provider.send("evm_increaseTime", [3700]);
       await network.provider.send("evm_mine");
 
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
+      const epochId = await rigContract.epochId();
       const deadline = await getFutureDeadline();
 
       // Mine at zero price
       await rigContract
         .connect(user1)
-        .mine(user1.address, 0, epochId, deadline, 0, "");
+        .mine(user1.address, epochId, deadline, 0, "");
 
       // New initPrice should be minInitPrice (since 0 * multiplier < minInitPrice)
-      const slotAfter = await rigContract.getSlot(0);
-      const initPrice = slotAfter.initPrice;
+      const initPrice = await rigContract.epochInitPrice();
       const minInitPrice = await rigContract.minInitPrice();
       expect(initPrice).to.equal(minInitPrice);
     });
@@ -314,29 +297,26 @@ describe("Business Logic Tests", function () {
     it("Exact fee percentages: 80% previous, 15% treasury, 4% team, 1% protocol", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
 
-      // Set team address (owner is user0/launcher)
-      await rigContract.connect(user0).setTeam(user3.address);
-
       // First mine to set up a previous rig holder
       await mineRig(testRig, user1);
 
-      // Get balances before second mine (miner fees go to claimable, not directly to wallet)
-      const prevRigClaimableBefore = await rigContract.accountToClaimable(user1.address);
+      // Get balances before second mine (team is now user0/launcher)
+      const prevRigBefore = await weth.balanceOf(user1.address);
       const treasuryBefore = await weth.balanceOf(testAuction);
-      const teamBefore = await weth.balanceOf(user3.address);
+      const teamBefore = await weth.balanceOf(user0.address);
       const protocolBefore = await weth.balanceOf(protocol.address);
 
       // Second mine
       await mineRig(testRig, user2);
 
-      // Get balances after (miner fees are in claimable mapping)
-      const prevRigClaimableAfter = await rigContract.accountToClaimable(user1.address);
+      // Get balances after (team is now user0/launcher)
+      const prevRigAfter = await weth.balanceOf(user1.address);
       const treasuryAfter = await weth.balanceOf(testAuction);
-      const teamAfter = await weth.balanceOf(user3.address);
+      const teamAfter = await weth.balanceOf(user0.address);
       const protocolAfter = await weth.balanceOf(protocol.address);
 
       // Calculate received
-      const prevRigReceived = prevRigClaimableAfter.sub(prevRigClaimableBefore);
+      const prevRigReceived = prevRigAfter.sub(prevRigBefore);
       const treasuryReceived = treasuryAfter.sub(treasuryBefore);
       const teamReceived = teamAfter.sub(teamBefore);
       const protocolReceived = protocolAfter.sub(protocolBefore);
@@ -362,19 +342,18 @@ describe("Business Logic Tests", function () {
       await network.provider.send("evm_increaseTime", [3700]);
       await network.provider.send("evm_mine");
 
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
       expect(price).to.equal(0);
 
       // Get treasury balance before
       const treasuryBefore = await weth.balanceOf(testAuction);
 
       // Mine at zero price
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
+      const epochId = await rigContract.epochId();
       const deadline = await getFutureDeadline();
       await rigContract
         .connect(user1)
-        .mine(user1.address, 0, epochId, deadline, 0, "");
+        .mine(user1.address, epochId, deadline, 0, "");
 
       // Treasury should have received nothing
       const treasuryAfter = await weth.balanceOf(testAuction);
@@ -401,8 +380,8 @@ describe("Business Logic Tests", function () {
       const treasuryReceived = treasuryAfter.sub(treasuryBefore);
 
       // Treasury should get 15% + 4% (team fee) = 19% = 1900 bps
-      const slot = await rigContract.getSlot(0);
-      const initPrice = slot.initPrice;
+      const epochId = await rigContract.epochId();
+      const initPrice = await rigContract.epochInitPrice();
       // Price was set after the mine, so we need to calculate what was paid
       // treasuryReceived should be ~19% of the price paid
       // Since previous miner gets 80% and protocol gets 1%, treasury gets remaining 19%
@@ -412,20 +391,19 @@ describe("Business Logic Tests", function () {
     it("Miner can set different address as rig recipient", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
 
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(testRig, price);
 
       // User1 pays but user3 becomes the rig holder
       const deadline = await getFutureDeadline();
       await rigContract
         .connect(user1)
-        .mine(user3.address, 0, epochId, deadline, price, "");
+        .mine(user3.address, epochId, deadline, price, "");
 
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(user3.address);
+      expect(await rigContract.epochMiner()).to.equal(user3.address);
     });
 
     it("Previous rig holder receives minted Unit tokens", async function () {
@@ -487,162 +465,146 @@ describe("Business Logic Tests", function () {
 
     it("Reverts with wrong epochId", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(testRig, price);
 
       // Use wrong epochId
       await expect(
         rigContract
           .connect(user1)
-          .mine(user1.address, 0, 999, deadline, price, "")
+          .mine(user1.address, 999, deadline, price, "")
       ).to.be.revertedWith("Rig__EpochIdMismatch()");
     });
 
     it("Reverts when deadline passed", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(testRig, price);
 
       // Use past deadline
       await expect(
-        rigContract.connect(user1).mine(user1.address, 0, epochId, 1, price, "")
-      ).to.be.revertedWith("Rig__DeadlinePassed()");
+        rigContract.connect(user1).mine(user1.address, epochId, 1, price, "")
+      ).to.be.revertedWith("Rig__Expired()");
     });
 
     it("Reverts when price exceeds maxPrice (slippage protection)", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
-
-      // First mine to reset epoch and get fresh price
-      await mineRig(testRig, user2);
-
-      // Get fresh slot and price immediately after mining
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
-
-      // Price should be non-zero at epoch start
-      expect(price).to.be.gt(0);
-
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
+
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(testRig, price);
 
-      // Use maxPrice much lower than actual price - should fail
-      const lowMaxPrice = price.div(10);
+      // Use maxPrice lower than actual price
       await expect(
         rigContract
           .connect(user1)
-          .mine(user1.address, 0, epochId, deadline, lowMaxPrice, "")
+          .mine(user1.address, epochId, deadline, price.div(2), "")
       ).to.be.revertedWith("Rig__MaxPriceExceeded()");
     });
 
     it("Reverts with zero rig address", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(testRig, price);
 
       await expect(
         rigContract
           .connect(user1)
-          .mine(AddressZero, 0, epochId, deadline, price, "")
-      ).to.be.revertedWith("Rig__ZeroMiner()");
+          .mine(AddressZero, epochId, deadline, price, "")
+      ).to.be.revertedWith("Rig__InvalidMiner()");
     });
   });
 
   // ============================================
-  // HALVING SCHEDULE (Amount-based, not time-based)
+  // HALVING SCHEDULE
   // ============================================
   describe("Halving Schedule", function () {
-    it("UPS halves after each halving amount threshold", async function () {
-      // Use small halvingAmount so we can trigger halvings with reasonable mining
-      const halvingAmt = convert("1000", 18);
+    it("UPS halves after each halving period", async function () {
       const result = await launchFreshRig(user0, {
         initialUps: convert("8", 18),
         tailUps: convert("0.5", 18),
-        halvingAmount: halvingAmt,
+        halvingPeriod: 86400, // 1 day (MIN_HALVING_PERIOD)
       });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
-      const unitContract = await ethers.getContractAt("Unit", result.unit);
 
-      // Initial UPS (before any minting)
+      // Initial UPS
       let ups = await rigContract.getUps();
       expect(ups).to.equal(convert("8", 18));
 
-      // Halving is based on totalMinted, not time
-      // First halving threshold: halvingAmount (1000 tokens)
-      // We need to mine and mint tokens to cross thresholds
-
-      // Mine once to set up a miner
-      await mineRig(result.rig, user1);
-
-      // Wait to accumulate tokens, then mine again to mint
-      // With UPS of 8 tokens/sec, we need ~125 seconds to mint 1000 tokens
-      await network.provider.send("evm_increaseTime", [150]);
+      // After 1 halving
+      await network.provider.send("evm_increaseTime", [86400]);
       await network.provider.send("evm_mine");
-      await mineRig(result.rig, user2);
-
-      // Check if first halving occurred
       ups = await rigContract.getUps();
-      const totalMinted = await rigContract.totalMinted();
+      expect(ups).to.equal(convert("4", 18));
 
-      // If totalMinted >= halvingAmount, UPS should be 4
-      if (totalMinted.gte(halvingAmt)) {
-        expect(ups).to.equal(convert("4", 18));
-      }
+      // After 2 halvings
+      await network.provider.send("evm_increaseTime", [86400]);
+      await network.provider.send("evm_mine");
+      ups = await rigContract.getUps();
+      expect(ups).to.equal(convert("2", 18));
+
+      // After 3 halvings
+      await network.provider.send("evm_increaseTime", [86400]);
+      await network.provider.send("evm_mine");
+      ups = await rigContract.getUps();
+      expect(ups).to.equal(convert("1", 18));
+
+      // After 4 halvings
+      await network.provider.send("evm_increaseTime", [86400]);
+      await network.provider.send("evm_mine");
+      ups = await rigContract.getUps();
+      expect(ups).to.equal(convert("0.5", 18)); // Reached tailUps
     });
 
     it("UPS never goes below tailUps", async function () {
-      // Use minimum halvingAmount (1000 ether) to trigger halvings
       const result = await launchFreshRig(user0, {
-        initialUps: convert("1000", 18), // High UPS to mint quickly
+        initialUps: convert("4", 18),
         tailUps: convert("1", 18),
-        halvingAmount: convert("1000", 18), // MIN_HALVING_AMOUNT
+        halvingPeriod: 86400, // 1 day (MIN_HALVING_PERIOD)
       });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      // Mine to set up a miner
-      await mineRig(result.rig, user1);
-
-      // Wait long enough to mint way past all halving thresholds
-      // With 1000 UPS, 100 seconds = 100,000 tokens minted (should cross many halvings)
-      await network.provider.send("evm_increaseTime", [100]);
-      await network.provider.send("evm_mine");
-      await mineRig(result.rig, user2);
-
-      const ups = await rigContract.getUps();
-      expect(ups).to.equal(convert("1", 18)); // Should be at tailUps
-    });
-
-    it("Time passing alone doesn't trigger halving (amount-based)", async function () {
-      const result = await launchFreshRig(user0, {
-        initialUps: convert("8", 18),
-        tailUps: convert("0.5", 18),
-        halvingAmount: convert("10000000", 18),
-      });
-      const rigContract = await ethers.getContractAt("Rig", result.rig);
-
-      // Forward 100 days - no mining means no tokens minted
+      // Fast forward many halving periods (100 days)
       await network.provider.send("evm_increaseTime", [86400 * 100]);
       await network.provider.send("evm_mine");
 
-      // UPS should still be initial because halving is amount-based, not time-based
       const ups = await rigContract.getUps();
-      expect(ups).to.equal(convert("8", 18)); // Should still be initial (no tokens minted)
+      expect(ups).to.equal(convert("1", 18)); // Should be tailUps
+    });
+
+    it("Partial halving periods don't trigger halving", async function () {
+      const result = await launchFreshRig(user0, {
+        initialUps: convert("8", 18),
+        tailUps: convert("0.5", 18),
+        halvingPeriod: 86400, // 1 day (MIN_HALVING_PERIOD)
+      });
+      const rigContract = await ethers.getContractAt("Rig", result.rig);
+
+      // Forward 12 hours (half a period)
+      await network.provider.send("evm_increaseTime", [43200]);
+      await network.provider.send("evm_mine");
+
+      const ups = await rigContract.getUps();
+      expect(ups).to.equal(convert("8", 18)); // Should still be initial
     });
 
     it("Mining at different halving stages mints correct amounts", async function () {
       const result = await launchFreshRig(user0, {
         initialUps: convert("100", 18),
         tailUps: convert("10", 18),
-        halvingAmount: convert("10000000", 18), // 1 day (MIN_HALVING_PERIOD)
+        halvingPeriod: 86400, // 1 day (MIN_HALVING_PERIOD)
       });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
       const unitContract = await ethers.getContractAt("Unit", await rigContract.unit());
@@ -863,7 +825,7 @@ describe("Business Logic Tests", function () {
 
       // Cannot set rig to zero address
       await expect(freshUnit.connect(user0).setRig(ethers.constants.AddressZero)).to.be.revertedWith(
-        "Unit__ZeroRig()"
+        "Unit__InvalidRig()"
       );
     });
 
@@ -933,7 +895,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -941,7 +902,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: 0, // Invalid
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -950,7 +911,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigInitialUpsOutOfRange()");
+      ).to.be.revertedWith("Rig__InvalidInitialUps()");
     });
 
     it("Reverts with zero tailUps", async function () {
@@ -959,7 +920,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -967,7 +927,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: 0, // Invalid
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -976,7 +936,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigTailUpsOutOfRange()");
+      ).to.be.revertedWith("Rig__InvalidTailUps()");
     });
 
     it("Reverts when tailUps > initialUps", async function () {
@@ -985,7 +945,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -993,7 +952,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("1", 18),
           tailUps: convert("2", 18), // tailUps > initialUps
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1002,16 +961,15 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigTailUpsOutOfRange()");
+      ).to.be.revertedWith("Rig__InvalidTailUps()");
     });
 
-    it("Reverts with zero halvingAmount", async function () {
+    it("Reverts with zero halvingPeriod", async function () {
       await donut.connect(user1).approve(core.address, convert("10", 18));
 
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1019,7 +977,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: 0, // Invalid
+          halvingPeriod: 0, // Invalid
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1028,7 +986,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigHalvingAmountOutOfRange()");
+      ).to.be.revertedWith("Rig__InvalidHalvingPeriod()");
     });
 
     it("Reverts with empty token symbol", async function () {
@@ -1037,7 +995,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "", // Invalid
           uri: "",
@@ -1045,7 +1002,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1094,44 +1051,45 @@ describe("Business Logic Tests", function () {
       testAuction = result.auction;
     });
 
-    it("Mine via Multicall with USDC", async function () {
+    it("Mine via Multicall wraps ETH automatically", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
-      await weth.connect(user1).approve(multicall.address, price.mul(2));
+      const ethBefore = await ethers.provider.getBalance(user1.address);
 
-      await multicall.connect(user1).mine(testRig, 0, epochId, deadline, price, "", {
-        value: 0,
+      await multicall.connect(user1).mine(testRig, epochId, deadline, price, "", {
+        value: price.mul(2),
       });
 
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(user1.address);
+      expect(await rigContract.epochMiner()).to.equal(user1.address);
     });
 
-    it("Multicall reverts with excess ETH", async function () {
+    it("Multicall refunds excess ETH as WETH", async function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
-      await weth.connect(user1).approve(multicall.address, price.mul(2));
+      const wethBefore = await weth.balanceOf(user1.address);
 
-      // Send excess ETH - should revert since no entropy needed
-      await expect(
-        multicall.connect(user1).mine(testRig, 0, epochId, deadline, price, "", {
-          value: convert("0.1", 18),
-        })
-      ).to.be.revertedWith("Multicall__ExcessETH()");
+      // Send 2x the price
+      await multicall.connect(user1).mine(testRig, epochId, deadline, price, "", {
+        value: price.mul(2),
+      });
+
+      const wethAfter = await weth.balanceOf(user1.address);
+
+      // Should have received refund (approximately price worth of WETH)
+      // The exact amount depends on price decay during execution
+      expect(wethAfter).to.be.gte(wethBefore);
     });
 
     it("getRig returns correct state", async function () {
       await mineRig(testRig, user1);
 
-      const state = await multicall.getRig(testRig, 0, user1.address);
+      const state = await multicall.getRig(testRig, user1.address);
 
       expect(state.miner).to.equal(user1.address);
       expect(state.epochId).to.equal(1);
@@ -1146,12 +1104,11 @@ describe("Business Logic Tests", function () {
     });
 
     it("getRig with zero address skips balance queries", async function () {
-      const state = await multicall.getRig(testRig, 0, AddressZero);
+      const state = await multicall.getRig(testRig, AddressZero);
 
-      expect(state.accountQuoteBalance).to.equal(0);
-      expect(state.accountDonutBalance).to.equal(0);
-      expect(state.accountUnitBalance).to.equal(0);
-      expect(state.accountClaimable).to.equal(0);
+      expect(state.ethBalance).to.equal(0);
+      expect(state.wethBalance).to.equal(0);
+      expect(state.unitBalance).to.equal(0);
     });
   });
 
@@ -1170,7 +1127,7 @@ describe("Business Logic Tests", function () {
       const rigContract = await ethers.getContractAt("Rig", testRig);
 
       await expect(rigContract.connect(user0).setTreasury(AddressZero)).to.be.revertedWith(
-        "Rig__ZeroTreasury()"
+        "Rig__InvalidTreasury()"
       );
     });
 
@@ -1220,7 +1177,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1228,7 +1184,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1237,7 +1193,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__AuctionEpochPeriodOutOfRange()");
+      ).to.be.revertedWith("Auction__EpochPeriodBelowMin()");
     });
 
     it("Reverts if price multiplier below minimum", async function () {
@@ -1246,7 +1202,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1254,7 +1209,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1263,7 +1218,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.05", 18), // Below 1.1x minimum
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__AuctionPriceMultiplierOutOfRange()");
+      ).to.be.revertedWith("Auction__PriceMultiplierBelowMin()");
     });
 
     it("Reverts if price multiplier above maximum", async function () {
@@ -1272,7 +1227,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1280,7 +1234,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1289,7 +1243,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("4", 18), // Above 3x maximum
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__AuctionPriceMultiplierOutOfRange()");
+      ).to.be.revertedWith("Auction__PriceMultiplierExceedsMax()");
     });
 
     it("Reverts if minInitPrice below absolute minimum", async function () {
@@ -1298,7 +1252,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1306,7 +1259,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1315,7 +1268,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: 100, // Below 1e6 minimum
         })
-      ).to.be.revertedWith("Core__AuctionMinInitPriceOutOfRange()");
+      ).to.be.revertedWith("Auction__MinInitPriceBelowMin()");
     });
   });
 
@@ -1329,7 +1282,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1337,7 +1289,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 300, // 5 minutes - below 10 minute minimum
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1346,7 +1298,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigEpochPeriodOutOfRange()");
+      ).to.be.revertedWith("Rig__EpochPeriodOutOfRange()");
     });
 
     it("Reverts if rig epoch period above maximum (365 days)", async function () {
@@ -1355,7 +1307,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1363,7 +1314,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 86400 * 366, // 366 days - above 365 day maximum
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: convert("0.0001", 18),
@@ -1372,7 +1323,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigEpochPeriodOutOfRange()");
+      ).to.be.revertedWith("Rig__EpochPeriodOutOfRange()");
     });
 
     it("Reverts if rig price multiplier below minimum (110%)", async function () {
@@ -1381,7 +1332,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1389,7 +1339,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("1.05", 18), // 105% - below 110% minimum
           rigMinInitPrice: convert("0.0001", 18),
@@ -1398,7 +1348,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigPriceMultiplierOutOfRange()");
+      ).to.be.revertedWith("Rig__PriceMultiplierOutOfRange()");
     });
 
     it("Reverts if rig price multiplier above maximum (300%)", async function () {
@@ -1407,7 +1357,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1415,7 +1364,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("4", 18), // 400% - above 300% maximum
           rigMinInitPrice: convert("0.0001", 18),
@@ -1424,7 +1373,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigPriceMultiplierOutOfRange()");
+      ).to.be.revertedWith("Rig__PriceMultiplierOutOfRange()");
     });
 
     it("Reverts if rig minInitPrice below absolute minimum", async function () {
@@ -1433,7 +1382,6 @@ describe("Business Logic Tests", function () {
       await expect(
         core.connect(user1).launch({
           launcher: user1.address,
-          quoteToken: weth.address,
           tokenName: "Test",
           tokenSymbol: "TST",
           uri: "",
@@ -1441,7 +1389,7 @@ describe("Business Logic Tests", function () {
           unitAmount: convert("1000000", 18),
           initialUps: convert("4", 18),
           tailUps: convert("0.01", 18),
-          halvingAmount: convert("10000000", 18),
+          halvingPeriod: 86400,
           rigEpochPeriod: 3600,
           rigPriceMultiplier: convert("2", 18),
           rigMinInitPrice: 100, // Below 1e6 minimum
@@ -1450,7 +1398,7 @@ describe("Business Logic Tests", function () {
           auctionPriceMultiplier: convert("1.2", 18),
           auctionMinInitPrice: convert("0.001", 18),
         })
-      ).to.be.revertedWith("Core__RigMinInitPriceOutOfRange()");
+      ).to.be.revertedWith("Rig__MinInitPriceBelowAbsoluteMin()");
     });
 
     it("Accepts valid rig parameters at boundary values", async function () {
@@ -1459,7 +1407,6 @@ describe("Business Logic Tests", function () {
       // Should not revert with exact minimum values
       const tx = await core.connect(user1).launch({
         launcher: user1.address,
-        quoteToken: weth.address,
         tokenName: "Boundary Test",
         tokenSymbol: "BNDRY",
         uri: "",
@@ -1467,7 +1414,7 @@ describe("Business Logic Tests", function () {
         unitAmount: convert("1000000", 18),
         initialUps: convert("4", 18),
         tailUps: convert("0.01", 18),
-        halvingAmount: convert("10000000", 18),
+        halvingPeriod: 86400,
         rigEpochPeriod: 600, // Exact minimum (10 minutes)
         rigPriceMultiplier: convert("1.1", 18), // Exact minimum (110%)
         rigMinInitPrice: 1000000, // Exact minimum (1e6)
@@ -1487,7 +1434,6 @@ describe("Business Logic Tests", function () {
       // Should not revert with exact maximum values
       const tx = await core.connect(user1).launch({
         launcher: user1.address,
-        quoteToken: weth.address,
         tokenName: "Max Boundary Test",
         tokenSymbol: "MAXB",
         uri: "",
@@ -1495,7 +1441,7 @@ describe("Business Logic Tests", function () {
         unitAmount: convert("1000000", 18),
         initialUps: convert("4", 18),
         tailUps: convert("0.01", 18),
-        halvingAmount: convert("10000000", 18),
+        halvingPeriod: 86400,
         rigEpochPeriod: 86400 * 365, // Exact maximum (365 days)
         rigPriceMultiplier: convert("3", 18), // Exact maximum (300%)
         rigMinInitPrice: convert("0.0001", 18),
@@ -1522,9 +1468,8 @@ describe("Business Logic Tests", function () {
       const users = [user1, user2, user3, user4, user0];
       for (let i = 0; i < users.length; i++) {
         await mineRig(result.rig, users[i]);
-        const slot = await rigContract.getSlot(0);
-        expect(slot.miner).to.equal(users[i].address);
-        expect(slot.epochId).to.equal(i + 1);
+        expect(await rigContract.epochMiner()).to.equal(users[i].address);
+        expect(await rigContract.epochId()).to.equal(i + 1);
       }
     });
 
@@ -1532,23 +1477,21 @@ describe("Business Logic Tests", function () {
       const result = await launchFreshRig(user0, {
         initialUps: convert("1", 18),
         tailUps: convert("0.001", 18),
-        halvingAmount: convert("10000000", 18),
+        halvingPeriod: 86400,
       });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      // Fast forward 1 year - time doesn't affect halving (it's amount-based)
+      // Fast forward 1 year
       await network.provider.send("evm_increaseTime", [86400 * 365]);
       await network.provider.send("evm_mine");
 
       // Mining should still work
       await mineRig(result.rig, user1);
-      const slot = await rigContract.getSlot(0);
-      expect(slot.miner).to.equal(user1.address);
+      expect(await rigContract.epochMiner()).to.equal(user1.address);
 
-      // UPS should still be at initialUps (halving is amount-based, not time-based)
-      // No tokens were minted before this mine, so no halvings occurred
+      // UPS should be at tailUps
       const ups = await rigContract.getUps();
-      expect(ups).to.equal(convert("1", 18)); // Still at initialUps
+      expect(ups).to.equal(convert("0.001", 18));
     });
 
     it("Fee distribution continues after treasury change", async function () {
@@ -1575,12 +1518,10 @@ describe("Business Logic Tests", function () {
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
       for (let i = 0; i < 10; i++) {
-        const slot = await rigContract.getSlot(0);
-        expect(slot.epochId).to.equal(i);
+        expect(await rigContract.epochId()).to.equal(i);
         await mineRig(result.rig, i % 2 === 0 ? user1 : user2);
       }
-      const slotFinal = await rigContract.getSlot(0);
-      expect(slotFinal.epochId).to.equal(10);
+      expect(await rigContract.epochId()).to.equal(10);
     });
   });
 });

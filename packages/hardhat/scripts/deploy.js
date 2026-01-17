@@ -11,20 +11,10 @@ const divDec = (amount, decimals = 18) => amount / 10 ** decimals;
 // =============================================================================
 
 // Base Mainnet addresses
-const USDC_MAINNET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // Real USDC on Base
-const DONUT_MAINNET = "0xae4a37d554c6d6f3e398546d8566b25052e0169c"; // Real DONUT on Base
-
-// Mock Token addresses (for staging/testing on mainnet)
-const MOCK_USDC = "0xe90495BE187d434e23A9B1FeC0B6Ce039700870e"; // Mock USDC for testing
-const MOCK_DONUT = "0xD50B69581362C60Ce39596B237C71e07Fc4F6fdA"; // Mock DONUT for testing
-
-// Toggle between mock and mainnet tokens
-const USDC_ADDRESS = MOCK_USDC; // Switch to USDC_MAINNET for production
-const DONUT_ADDRESS = MOCK_DONUT; // Switch to DONUT_MAINNET for production
-
+const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
+const DONUT_ADDRESS = "0xae4a37d554c6d6f3e398546d8566b25052e0169c"; // TODO: Set DONUT token address
 const UNISWAP_V2_FACTORY = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6";
 const UNISWAP_V2_ROUTER = "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24";
-const ENTROPY_ADDRESS = "0x6e7d74fa7d5c90fef9f0512987605a6d546181bb"; // Pyth Entropy on Base
 
 // Protocol settings
 const PROTOCOL_FEE_ADDRESS = "0xbA366c82815983fF130C23CED78bD95E1F2c18EA"; // TODO: Set protocol fee recipient
@@ -32,30 +22,20 @@ const MULTISIG_ADDRESS = "0xeE0CB49D2805DA6bC0A979ddAd87bb793fbB765E";
 const MIN_DONUT_FOR_LAUNCH = convert("1000", 18); // 1000 DONUT minimum
 
 // Deployed Contract Addresses (paste after deployment)
-const UNIT_FACTORY = "0xD7980Db9048d4d7411D8f3d236f200aE1519E3cc";
-const RIG_FACTORY = "0xCcC0eb8E2809F0D03CBA12E3E0687298A2022fbd";
-const AUCTION_FACTORY = "0x9F7dddaCF5f82d6A0D010584f06Bc1243E74DbE6";
-const CORE = "0xF837F616Fe1fd33Cd8290759D3ae1FB09230d73b";
-const MULTICALL = "0x9EEbEe08C3823290E7A17F27D4c644380E978cA8";
+const UNIT_FACTORY = "0xBe569151312c41d1927322705EB96933fe4911A5";
+const RIG_FACTORY = "0x74748d7BeEDC9Cb503294ce97C85ae6Dc9Bd2bD6";
+const AUCTION_FACTORY = "0x856c88cDD4fFd6E922b9C9A468504A738026418d";
+const CORE = "0xA35588D152F45C95f5b152e099647f081BD9F5AB";
+const MULTICALL = "0x5D16A5EB8Ac507eF417A44b8d767104dC52EFa87";
 
 // Contract Variables
-let usdc, donut, unitFactory, rigFactory, auctionFactory, core, multicall;
+let unitFactory, rigFactory, auctionFactory, core, multicall;
 
 // =============================================================================
 // GET CONTRACTS
 // =============================================================================
 
 async function getContracts() {
-  usdc = await ethers.getContractAt(
-    "contracts/mocks/MockUSDC.sol:MockUSDC",
-    USDC_ADDRESS
-  );
-
-  donut = await ethers.getContractAt(
-    "contracts/mocks/MockDONUT.sol:MockDONUT",
-    DONUT_ADDRESS
-  );
-
   if (UNIT_FACTORY) {
     unitFactory = await ethers.getContractAt(
       "contracts/UnitFactory.sol:UnitFactory",
@@ -134,13 +114,13 @@ async function deployCore() {
 
   const artifact = await ethers.getContractFactory("Core");
   const contract = await artifact.deploy(
+    WETH_ADDRESS,
     DONUT_ADDRESS,
     UNISWAP_V2_FACTORY,
     UNISWAP_V2_ROUTER,
     unitFactory.address,
     rigFactory.address,
     auctionFactory.address,
-    ENTROPY_ADDRESS,
     PROTOCOL_FEE_ADDRESS,
     MIN_DONUT_FOR_LAUNCH,
     { gasPrice: ethers.gasPrice }
@@ -153,9 +133,14 @@ async function deployCore() {
 async function deployMulticall() {
   console.log("Starting Multicall Deployment");
   const artifact = await ethers.getContractFactory("Multicall");
-  const contract = await artifact.deploy(core.address, DONUT_ADDRESS, {
-    gasPrice: ethers.gasPrice,
-  });
+  const contract = await artifact.deploy(
+    core.address,
+    WETH_ADDRESS,
+    DONUT_ADDRESS,
+    {
+      gasPrice: ethers.gasPrice,
+    }
+  );
   multicall = await contract.deployed();
   await sleep(5000);
   console.log("Multicall Deployed at:", multicall.address);
@@ -201,13 +186,13 @@ async function verifyCore() {
     address: core?.address || CORE,
     contract: "contracts/Core.sol:Core",
     constructorArguments: [
+      WETH_ADDRESS,
       DONUT_ADDRESS,
       UNISWAP_V2_FACTORY,
       UNISWAP_V2_ROUTER,
       unitFactory?.address || UNIT_FACTORY,
       rigFactory?.address || RIG_FACTORY,
       auctionFactory?.address || AUCTION_FACTORY,
-      ENTROPY_ADDRESS,
       PROTOCOL_FEE_ADDRESS,
       MIN_DONUT_FOR_LAUNCH,
     ],
@@ -220,7 +205,7 @@ async function verifyMulticall() {
   await hre.run("verify:verify", {
     address: multicall?.address || MULTICALL,
     contract: "contracts/Multicall.sol:Multicall",
-    constructorArguments: [core?.address || CORE, DONUT_ADDRESS],
+    constructorArguments: [core?.address || CORE, WETH_ADDRESS, DONUT_ADDRESS],
   });
   console.log("Multicall Verified");
 }
@@ -283,31 +268,30 @@ async function verifyRigByIndex(rigIndex) {
   // Read all constructor args from the deployed contract
   const unitAddress = await rig.unit();
   const quoteAddress = await rig.quote();
-  const entropyAddress = await rig.entropy();
-  const protocolAddress = await rig.protocol();
   const treasury = await rig.treasury();
-
-  // Config struct fields
+  const team = await rig.team();
+  const coreAddress = await rig.core();
+  const uri = await rig.uri();
+  const initialUps = await rig.initialUps();
+  const tailUps = await rig.tailUps();
+  const halvingPeriod = await rig.halvingPeriod();
   const epochPeriod = await rig.epochPeriod();
   const priceMultiplier = await rig.priceMultiplier();
   const minInitPrice = await rig.minInitPrice();
-  const initialUps = await rig.initialUps();
-  const halvingAmount = await rig.halvingAmount();
-  const tailUps = await rig.tailUps();
 
   console.log("Starting Rig Verification for:", rigAddress);
   console.log("  Unit:", unitAddress);
   console.log("  Quote:", quoteAddress);
-  console.log("  Entropy:", entropyAddress);
-  console.log("  Protocol:", protocolAddress);
   console.log("  Treasury:", treasury);
-  console.log("  Config:");
-  console.log("    Epoch Period:", epochPeriod.toString());
-  console.log("    Price Multiplier:", priceMultiplier.toString());
-  console.log("    Min Init Price:", minInitPrice.toString());
-  console.log("    Initial UPS:", initialUps.toString());
-  console.log("    Halving Amount:", halvingAmount.toString());
-  console.log("    Tail UPS:", tailUps.toString());
+  console.log("  Team:", team);
+  console.log("  Core:", coreAddress);
+  console.log("  URI:", uri);
+  console.log("  Initial UPS:", initialUps.toString());
+  console.log("  Tail UPS:", tailUps.toString());
+  console.log("  Halving Period:", halvingPeriod.toString());
+  console.log("  Epoch Period:", epochPeriod.toString());
+  console.log("  Price Multiplier:", priceMultiplier.toString());
+  console.log("  Min Init Price:", minInitPrice.toString());
 
   await hre.run("verify:verify", {
     address: rigAddress,
@@ -315,17 +299,16 @@ async function verifyRigByIndex(rigIndex) {
     constructorArguments: [
       unitAddress,
       quoteAddress,
-      entropyAddress,
-      protocolAddress,
       treasury,
-      {
-        epochPeriod: epochPeriod,
-        priceMultiplier: priceMultiplier,
-        minInitPrice: minInitPrice,
-        initialUps: initialUps,
-        halvingAmount: halvingAmount,
-        tailUps: tailUps,
-      },
+      team,
+      coreAddress,
+      uri,
+      initialUps,
+      tailUps,
+      halvingPeriod,
+      epochPeriod,
+      priceMultiplier,
+      minInitPrice,
     ],
   });
   console.log("Rig Verified:", rigAddress);
@@ -417,11 +400,10 @@ async function printDeployment() {
   console.log("\n==================== DEPLOYMENT ====================\n");
 
   console.log("--- Configuration ---");
-  console.log("USDC (Quote Token):  ", USDC_ADDRESS);
+  console.log("WETH:                ", WETH_ADDRESS);
   console.log("DONUT:               ", DONUT_ADDRESS || "NOT SET");
   console.log("Uniswap V2 Factory:  ", UNISWAP_V2_FACTORY);
   console.log("Uniswap V2 Router:   ", UNISWAP_V2_ROUTER);
-  console.log("Entropy:             ", ENTROPY_ADDRESS);
   console.log("Protocol Fee Address:", PROTOCOL_FEE_ADDRESS || "NOT SET");
   console.log("Min DONUT for Launch:", divDec(MIN_DONUT_FOR_LAUNCH));
 
@@ -465,8 +447,8 @@ async function printCoreState() {
   console.log("\n--- Core State ---");
   console.log("Owner:               ", await core.owner());
   console.log("Protocol Fee Address:", await core.protocolFeeAddress());
+  console.log("WETH:                ", await core.weth());
   console.log("DONUT:               ", await core.donutToken());
-  console.log("Entropy:             ", await core.entropy());
   console.log("Min DONUT:           ", divDec(await core.minDonutForLaunch()));
   console.log("Unit Factory:        ", await core.unitFactory());
   console.log("Rig Factory:         ", await core.rigFactory());

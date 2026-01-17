@@ -7,7 +7,7 @@ const AddressZero = "0x0000000000000000000000000000000000000000";
 const AddressDead = "0x000000000000000000000000000000000000dEaD";
 
 let owner, protocol, team, user0, user1, user2;
-let weth, donut, core, multicall, entropy;
+let weth, donut, core, multicall;
 let rig, auction, unit, lpToken;
 let rigFactory, auctionFactory;
 
@@ -30,11 +30,6 @@ describe("Core Tests", function () {
     // Deploy mock DONUT token (using MockWETH as a simple ERC20)
     donut = await wethArtifact.deploy();
     console.log("- DONUT Initialized");
-
-    // Deploy mock Entropy
-    const entropyArtifact = await ethers.getContractFactory("MockEntropy");
-    entropy = await entropyArtifact.deploy();
-    console.log("- Entropy Initialized");
 
     // Deploy mock Uniswap V2 Factory and Router
     const mockUniswapFactoryArtifact = await ethers.getContractFactory("MockUniswapV2Factory");
@@ -63,13 +58,13 @@ describe("Core Tests", function () {
     // Deploy Core
     const coreArtifact = await ethers.getContractFactory("Core");
     core = await coreArtifact.deploy(
+      weth.address,
       donut.address,
       uniswapFactory.address,
       uniswapRouter.address,
       unitFactory.address,
       rigFactory.address,
       auctionFactory.address,
-      entropy.address,
       protocol.address,
       convert("100", 18) // minDonutForLaunch
     );
@@ -77,7 +72,7 @@ describe("Core Tests", function () {
 
     // Deploy Multicall
     const multicallArtifact = await ethers.getContractFactory("Multicall");
-    multicall = await multicallArtifact.deploy(core.address, donut.address);
+    multicall = await multicallArtifact.deploy(core.address, weth.address, donut.address);
     console.log("- Multicall Initialized");
 
     // Mint DONUT to user0 for launching
@@ -101,7 +96,6 @@ describe("Core Tests", function () {
 
     const launchParams = {
       launcher: user0.address,
-      quoteToken: weth.address,
       tokenName: "Test Unit",
       tokenSymbol: "TUNIT",
       uri: "",
@@ -109,7 +103,7 @@ describe("Core Tests", function () {
       unitAmount: convert("1000000", 18),
       initialUps: convert("4", 18),
       tailUps: convert("0.01", 18),
-      halvingAmount: convert("10000000", 18), // 10M tokens
+      halvingPeriod: 86400 * 30, // 30 days
       rigEpochPeriod: 3600, // 1 hour
       rigPriceMultiplier: convert("2", 18),
       rigMinInitPrice: convert("0.0001", 18),
@@ -160,12 +154,14 @@ describe("Core Tests", function () {
 
     console.log("Initial UPS:", divDec(await rigContract.initialUps()));
     console.log("Tail UPS:", divDec(await rigContract.tailUps()));
-    console.log("Halving Amount:", divDec(await rigContract.halvingAmount()));
+    console.log("Halving Period:", (await rigContract.halvingPeriod()).toString());
     console.log("Epoch Period:", (await rigContract.epochPeriod()).toString());
     console.log("Treasury:", await rigContract.treasury());
-    console.log("Protocol:", await rigContract.protocol());
+    console.log("Team:", await rigContract.team());
+    console.log("Core:", await rigContract.core());
 
     expect(await rigContract.treasury()).to.equal(auction);
+    expect(await rigContract.team()).to.equal(user0.address); // launcher is now team
   });
 
   it("Verify LP tokens burned", async function () {
@@ -176,15 +172,15 @@ describe("Core Tests", function () {
     expect(deadBalance).to.be.gt(0);
   });
 
-  it("User1 mines slot 0", async function () {
+  it("User1 mines", async function () {
     console.log("******************************************************");
     const rigContract = await ethers.getContractAt("Rig", rig);
 
-    // Get current state for slot 0
-    const slot = await rigContract.getSlot(0);
-    const price = await rigContract.getPrice(0);
+    // Get current state
+    const epochId = await rigContract.epochId();
+    const price = await rigContract.getPrice();
 
-    console.log("Current epoch:", slot.epochId.toString());
+    console.log("Current epoch:", epochId.toString());
     console.log("Current price:", divDec(price));
 
     // Approve WETH and mine
@@ -193,24 +189,24 @@ describe("Core Tests", function () {
 
     await rigContract
       .connect(user1)
-      .mine(user1.address, 0, slot.epochId, 1961439882, price, "https://example.com");
+      .mine(user1.address, epochId, 1961439882, price, "https://example.com");
 
     console.log("User1 mined successfully");
-    const newSlot = await rigContract.getSlot(0);
-    expect(newSlot.miner).to.equal(user1.address);
+    expect(await rigContract.epochMiner()).to.equal(user1.address);
   });
 
   it("Verify fee distribution", async function () {
     console.log("******************************************************");
     const rigContract = await ethers.getContractAt("Rig", rig);
 
-    // Get current state for slot 0
-    const slot = await rigContract.getSlot(0);
-    const price = await rigContract.getPrice(0);
+    // Get current state
+    const epochId = await rigContract.epochId();
+    const price = await rigContract.getPrice();
 
-    // Get balances before (miner fees go to claimable, not directly to wallet)
-    const user1ClaimableBefore = await rigContract.accountToClaimable(user1.address);
+    // Get balances before (team is now user0/launcher)
+    const user1WethBefore = await weth.balanceOf(user1.address);
     const auctionWethBefore = await weth.balanceOf(auction);
+    const teamWethBefore = await weth.balanceOf(user0.address);
     const protocolWethBefore = await weth.balanceOf(protocol.address);
 
     // User2 mines
@@ -219,38 +215,60 @@ describe("Core Tests", function () {
 
     await rigContract
       .connect(user2)
-      .mine(user2.address, 0, slot.epochId, 1961439882, price, "https://example.com");
+      .mine(user2.address, epochId, 1961439882, price, "https://example.com");
 
-    // Get balances after (miner fees are in claimable mapping)
-    const user1ClaimableAfter = await rigContract.accountToClaimable(user1.address);
+    // Get balances after (team is now user0/launcher)
+    const user1WethAfter = await weth.balanceOf(user1.address);
     const auctionWethAfter = await weth.balanceOf(auction);
+    const teamWethAfter = await weth.balanceOf(user0.address);
     const protocolWethAfter = await weth.balanceOf(protocol.address);
 
     // Calculate received amounts
-    const user1Received = user1ClaimableAfter.sub(user1ClaimableBefore);
+    const user1Received = user1WethAfter.sub(user1WethBefore);
     const auctionReceived = auctionWethAfter.sub(auctionWethBefore);
+    const teamReceived = teamWethAfter.sub(teamWethBefore);
     const protocolReceived = protocolWethAfter.sub(protocolWethBefore);
 
     console.log("Price paid:", divDec(price));
-    console.log("Previous miner (80%):", divDec(user1Received));
+    console.log("Previous rig (80%):", divDec(user1Received));
     console.log("Treasury/Auction (15%):", divDec(auctionReceived));
+    console.log("Team (4%):", divDec(teamReceived));
     console.log("Protocol (1%):", divDec(protocolReceived));
 
-    // Verify percentages using actual amounts received
-    const totalReceived = user1Received.add(auctionReceived).add(protocolReceived);
-    const tolerance = totalReceived.div(100); // 1% tolerance
+    // Verify percentages using actual amounts received (accounts for price decay between read and execution)
+    const totalReceived = user1Received.add(auctionReceived).add(teamReceived).add(protocolReceived);
 
-    expect(user1Received).to.be.gt(0);
-    expect(auctionReceived).to.be.gt(0);
-    expect(protocolReceived).to.be.gt(0);
+    // Verify fee ratios match the expected percentages (80/15/4/1)
+    // Using closeTo to account for rounding in basis point calculations
+    const tolerance = totalReceived.div(1000); // 0.1% tolerance
+
+    const expectedPreviousRig = totalReceived.mul(8000).div(10000);
+    const expectedTreasury = totalReceived.mul(1500).div(10000);
+    const expectedTeam = totalReceived.mul(400).div(10000);
+
+    expect(user1Received).to.be.closeTo(expectedPreviousRig, tolerance);
+    expect(auctionReceived).to.be.closeTo(expectedTreasury, tolerance);
+    expect(teamReceived).to.be.closeTo(expectedTeam, tolerance);
   });
 
-  it("Verify Unit tokens minted to previous miner", async function () {
+  it("Verify Unit tokens minted to previous rig", async function () {
     console.log("******************************************************");
     const unitContract = await ethers.getContractAt("Unit", unit);
     const user1Balance = await unitContract.balanceOf(user1.address);
     console.log("User1 Unit balance:", divDec(user1Balance));
     expect(user1Balance).to.be.gt(0);
+  });
+
+  it("Forward time 30 days - halving", async function () {
+    console.log("******************************************************");
+    await network.provider.send("evm_increaseTime", [86400 * 30]);
+    await network.provider.send("evm_mine");
+    console.log("- time forwarded 30 days");
+
+    const rigContract = await ethers.getContractAt("Rig", rig);
+    const ups = await rigContract.getUps();
+    console.log("UPS after halving:", divDec(ups));
+    expect(ups).to.equal(convert("2", 18)); // Should be halved from 4 to 2
   });
 
   it("Launcher can change treasury", async function () {
@@ -309,7 +327,6 @@ describe("Core Tests", function () {
 
     const launchParams = {
       launcher: user0.address,
-      quoteToken: weth.address,
       tokenName: "Test Unit 2",
       tokenSymbol: "TUNIT2",
       uri: "",
@@ -317,7 +334,7 @@ describe("Core Tests", function () {
       unitAmount: convert("1000000", 18),
       initialUps: convert("4", 18),
       tailUps: convert("0.01", 18),
-      halvingAmount: convert("10000000", 18),
+      halvingPeriod: 86400 * 30,
       rigEpochPeriod: 3600,
       rigPriceMultiplier: convert("2", 18),
       rigMinInitPrice: convert("0.0001", 18),
@@ -341,7 +358,6 @@ describe("Core Tests", function () {
     // Test empty token name
     let launchParams = {
       launcher: user0.address,
-      quoteToken: weth.address,
       tokenName: "",
       tokenSymbol: "TUNIT2",
       uri: "",
@@ -349,7 +365,7 @@ describe("Core Tests", function () {
       unitAmount: convert("1000000", 18),
       initialUps: convert("4", 18),
       tailUps: convert("0.01", 18),
-      halvingAmount: convert("10000000", 18),
+      halvingPeriod: 86400 * 30,
       rigEpochPeriod: 3600,
       rigPriceMultiplier: convert("2", 18),
       rigMinInitPrice: convert("0.0001", 18),
@@ -370,15 +386,14 @@ describe("Core Tests", function () {
 
   it("Multicall getRig", async function () {
     console.log("******************************************************");
-    const state = await multicall.getRig(rig, 0, user1.address);
+    const state = await multicall.getRig(rig, user1.address);
     console.log("Epoch ID:", state.epochId.toString());
     console.log("Init Price:", divDec(state.initPrice));
     console.log("Current Price:", divDec(state.price));
     console.log("UPS:", divDec(state.ups));
     console.log("Next UPS:", divDec(state.nextUps));
     console.log("Current Miner:", state.miner);
-    console.log("User1 Unit Balance:", divDec(state.accountUnitBalance));
-    console.log("Capacity:", state.capacity.toString());
+    console.log("User1 Unit Balance:", divDec(state.unitBalance));
   });
 
   it("Multicall getAuction", async function () {
@@ -388,6 +403,6 @@ describe("Core Tests", function () {
     console.log("Init Price:", divDec(state.initPrice));
     console.log("Current Price:", divDec(state.price));
     console.log("Payment Token:", state.paymentToken);
-    console.log("Quote Accumulated:", divDec(state.quoteAccumulated));
+    console.log("WETH Accumulated:", divDec(state.wethAccumulated));
   });
 });

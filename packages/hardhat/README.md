@@ -148,21 +148,18 @@ The 15% treasury fee accumulates and is auctioned to LP holders via Dutch auctio
 |-----------|-------------|---------|
 | `tokenName` | Token display name | "My Token" |
 | `tokenSymbol` | Ticker symbol | "MTK" |
-| `quoteToken` | ERC20 payment token for mining | USDC address |
 | `unitUri` | Metadata URI (logo, etc.) | "ipfs://Qm..." |
 | `donutAmount` | DONUT for liquidity | 1000 |
 | `initialUps` | Starting emission rate (max: 1M/sec) | 4 tokens/sec |
 | `tailUps` | Minimum emission rate | 0.01 tokens/sec |
-| `halvingAmount` | Token supply threshold for halving | 10M tokens |
+| `halvingPeriod` | Time between halvings (min: 1 day) | 30 days |
 | `rigEpochPeriod` | Mining epoch duration | 1 hour |
 | `rigPriceMultiplier` | Price increase per epoch | 2x |
-| `rigMinInitPrice` | Floor starting price | 0.0001 USDC |
+| `rigMinInitPrice` | Floor starting price | 0.0001 ETH |
 | `auctionInitPrice` | Auction starting price | 1 LP token |
 | `auctionEpochPeriod` | Auction duration | 1 day |
 | `auctionPriceMultiplier` | Auction price increase | 1.2x |
 | `auctionMinInitPrice` | Auction floor price | 0.001 LP |
-
-> **⚠️ Quote Token Requirements:** The `quoteToken` must be a standard ERC20 token. **Fee-on-transfer tokens and rebasing tokens are NOT supported** and will break the mining mechanics. Use standard tokens like USDC, WETH, or DAI.
 
 ### After Launch
 
@@ -296,7 +293,6 @@ function launch(LaunchParams calldata params) external returns (
 
 event Core__Launched(
     address launcher,
-    address quoteToken,
     address unit,
     address rig,
     address auction,
@@ -308,7 +304,7 @@ event Core__Launched(
     uint256 unitAmount,
     uint256 initialUps,
     uint256 tailUps,
-    uint256 halvingAmount,
+    uint256 halvingPeriod,
     uint256 rigEpochPeriod,
     uint256 rigPriceMultiplier,
     uint256 rigMinInitPrice,
@@ -407,18 +403,16 @@ await donut.approve(coreAddress, donutAmount);
 // 2. Launch
 const params = {
   launcher: userAddress,
-  quoteToken: usdcAddress, // Any standard ERC20 (NOT fee-on-transfer or rebasing)
   tokenName: "My Token",
   tokenSymbol: "MTK",
   unitUri: "ipfs://QmYourMetadataHash",
   donutAmount: ethers.utils.parseEther("1000"),
-  unitAmount: ethers.utils.parseEther("1000000"),
   initialUps: ethers.utils.parseEther("4"),
   tailUps: ethers.utils.parseEther("0.01"),
-  halvingAmount: ethers.utils.parseEther("10000000"),
+  halvingPeriod: 30 * 24 * 60 * 60,
   rigEpochPeriod: 60 * 60,
   rigPriceMultiplier: ethers.utils.parseEther("2"),
-  rigMinInitPrice: ethers.utils.parseUnits("0.01", 6), // USDC has 6 decimals
+  rigMinInitPrice: ethers.utils.parseEther("0.0001"),
   auctionInitPrice: ethers.utils.parseEther("1"),
   auctionEpochPeriod: 24 * 60 * 60,
   auctionPriceMultiplier: ethers.utils.parseEther("1.2"),
@@ -479,24 +473,17 @@ SCAN_API_KEY=your_basescan_api_key
 
 ### Configuration
 
-Edit `scripts/deploy.js`:
+Edit `scripts/deployFactory.js`:
 
 ```javascript
-// Token addresses
-const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // For Multicall helper
+const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
 const DONUT_ADDRESS = "0x...";  // DONUT token
-
-// Infrastructure
 const UNISWAP_V2_FACTORY = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6";
 const UNISWAP_V2_ROUTER = "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24";
-const ENTROPY_ADDRESS = "0x6e7d74fa7d5c90fef9f0512987605a6d546181bb"; // Pyth Entropy
-
-// Protocol settings
 const PROTOCOL_FEE_ADDRESS = "0x...";
-const MIN_DONUT_FOR_LAUNCH = 1000;
+const MIN_DONUT_FOR_LAUNCH = 100;
+const INITIAL_UNIT_MINT_AMOUNT = 1_000_000;
 ```
-
-> **Note:** `USDC_ADDRESS` is only used for the Multicall helper contract. Launchers can specify any ERC20 as their quote token when launching.
 
 ### Deploy
 
@@ -543,7 +530,7 @@ This codebase has been audited. See [ClaudeCodeAudit.md](./ClaudeCodeAudit.md) f
 
 **Summary:**
 - 0 Critical, 0 High, 0 Medium vulnerabilities
-- 388 tests passing
+- 284 tests passing
 - All arithmetic operations verified overflow-safe
 - 10 cross-contract attack vectors analyzed - none exploitable
 
@@ -553,7 +540,7 @@ This codebase has been audited. See [ClaudeCodeAudit.md](./ClaudeCodeAudit.md) f
 |-----------|-----|-----|
 | `initialUps` | 1 | 1e24 (1M tokens/sec) |
 | `tailUps` | 1 | initialUps |
-| `halvingAmount` | 1000 tokens | - |
+| `halvingPeriod` | 1 day | - |
 | `epochPeriod` (Rig) | 10 minutes | 365 days |
 | `epochPeriod` (Auction) | 1 hour | 365 days |
 | `priceMultiplier` | 1.1x (110%) | 3x (300%) |
@@ -562,8 +549,7 @@ This codebase has been audited. See [ClaudeCodeAudit.md](./ClaudeCodeAudit.md) f
 ### Immutable After Launch
 
 - Token name/symbol
-- Quote token (payment token for mining)
-- Emission schedule (initialUps, tailUps, halvingAmount)
+- Emission schedule (initialUps, tailUps, halvingPeriod)
 - Price mechanics (epochPeriod, multiplier, minPrice)
 - Initial liquidity (burned forever)
 - Unit minting rights (locked to Rig contract)
@@ -582,16 +568,6 @@ This codebase has been audited. See [ClaudeCodeAudit.md](./ClaudeCodeAudit.md) f
 - Changing emission parameters
 - LP drainage attacks
 - Flash loan exploits
-
-### Unsupported Token Types
-
-The following token types are **NOT supported** as quote tokens and will break the mining mechanics:
-
-- **Fee-on-transfer tokens** - Tokens that take a fee on every transfer (e.g., some reflection tokens)
-- **Rebasing tokens** - Tokens that adjust balances automatically (e.g., stETH, AMPL)
-- **Tokens with blocklists** - May cause transactions to revert unexpectedly
-
-Use only standard ERC20 tokens like USDC, WETH, DAI, or other well-audited stablecoins.
 
 ### Frontrun Protection
 

@@ -33,33 +33,15 @@ contract Core is Ownable, ReentrancyGuard {
 
     address public constant DEAD_ADDRESS = 0x000000000000000000000000000000000000dEaD;
 
-    // Rig parameter bounds (mirrored from Rig.sol for early validation)
-    uint256 public constant RIG_MIN_EPOCH_PERIOD = 10 minutes;
-    uint256 public constant RIG_MAX_EPOCH_PERIOD = 365 days;
-    uint256 public constant RIG_MIN_PRICE_MULTIPLIER = 1.1e18;
-    uint256 public constant RIG_MAX_PRICE_MULTIPLIER = 3e18;
-    uint256 public constant RIG_ABS_MIN_INIT_PRICE = 1e6;
-    uint256 public constant RIG_ABS_MAX_INIT_PRICE = type(uint192).max;
-    uint256 public constant RIG_MAX_INITIAL_UPS = 1e24;
-    uint256 public constant RIG_MIN_HALVING_AMOUNT = 1000 ether;
-
-    // Auction parameter bounds (mirrored from Auction.sol for early validation)
-    uint256 public constant AUCTION_MIN_EPOCH_PERIOD = 1 hours;
-    uint256 public constant AUCTION_MAX_EPOCH_PERIOD = 365 days;
-    uint256 public constant AUCTION_MIN_PRICE_MULTIPLIER = 1.1e18;
-    uint256 public constant AUCTION_MAX_PRICE_MULTIPLIER = 3e18;
-    uint256 public constant AUCTION_ABS_MIN_INIT_PRICE = 1e6;
-    uint256 public constant AUCTION_ABS_MAX_INIT_PRICE = type(uint192).max;
-
     /*----------  IMMUTABLES  -------------------------------------------*/
 
+    address public immutable weth; // WETH token (quote token for all rigs)
     address public immutable donutToken; // token required to launch
     address public immutable uniswapV2Factory; // Uniswap V2 factory
     address public immutable uniswapV2Router; // Uniswap V2 router
     address public immutable unitFactory; // factory for deploying Unit tokens
     address public immutable rigFactory; // factory for deploying Rigs
     address public immutable auctionFactory; // factory for deploying Auctions
-    address public immutable entropy; // Pyth Entropy contract for randomness
 
     /*----------  STATE  ------------------------------------------------*/
 
@@ -72,17 +54,14 @@ contract Core is Ownable, ReentrancyGuard {
     mapping(address => address) public rigToUnit; // rig => Unit token
     mapping(address => address) public rigToAuction; // rig => Auction contract
     mapping(address => address) public rigToLP; // rig => LP token
-    mapping(address => address) public rigToQuote; // rig => quote token (payment token)
 
     /*----------  STRUCTS  ----------------------------------------------*/
 
     /**
      * @notice Parameters for launching a new Rig.
-     * @dev quoteToken must be a standard ERC20 (no rebasing or fee-on-transfer tokens)
      */
     struct LaunchParams {
         address launcher; // address to receive Rig ownership, team fees, and initial miner
-        address quoteToken; // ERC20 payment token for mining (e.g., USDC, WETH)
         string tokenName; // Unit token name
         string tokenSymbol; // Unit token symbol
         string uri; // metadata URI for the unit token
@@ -90,7 +69,7 @@ contract Core is Ownable, ReentrancyGuard {
         uint256 unitAmount; // Unit tokens minted for initial LP
         uint256 initialUps; // starting units per second
         uint256 tailUps; // minimum units per second
-        uint256 halvingAmount; // token supply threshold for halving
+        uint256 halvingPeriod; // time between halvings
         uint256 rigEpochPeriod; // rig auction epoch duration
         uint256 rigPriceMultiplier; // rig price multiplier
         uint256 rigMinInitPrice; // rig minimum starting price
@@ -103,30 +82,16 @@ contract Core is Ownable, ReentrancyGuard {
     /*----------  ERRORS  -----------------------------------------------*/
 
     error Core__InsufficientDonut();
-    error Core__ZeroLauncher();
-    error Core__ZeroQuoteToken();
+    error Core__InvalidLauncher();
     error Core__EmptyTokenName();
     error Core__EmptyTokenSymbol();
-    error Core__ZeroUnitAmount();
+    error Core__InvalidUnitAmount();
     error Core__ZeroAddress();
-    // Rig parameter errors
-    error Core__RigEpochPeriodOutOfRange();
-    error Core__RigPriceMultiplierOutOfRange();
-    error Core__RigMinInitPriceOutOfRange();
-    error Core__RigInitialUpsOutOfRange();
-    error Core__RigTailUpsOutOfRange();
-    error Core__RigHalvingAmountOutOfRange();
-    // Auction parameter errors
-    error Core__AuctionEpochPeriodOutOfRange();
-    error Core__AuctionPriceMultiplierOutOfRange();
-    error Core__AuctionInitPriceOutOfRange();
-    error Core__AuctionMinInitPriceOutOfRange();
 
     /*----------  EVENTS  -----------------------------------------------*/
 
     event Core__Launched(
         address launcher,
-        address quoteToken,
         address unit,
         address rig,
         address auction,
@@ -138,7 +103,7 @@ contract Core is Ownable, ReentrancyGuard {
         uint256 unitAmount,
         uint256 initialUps,
         uint256 tailUps,
-        uint256 halvingAmount,
+        uint256 halvingPeriod,
         uint256 rigEpochPeriod,
         uint256 rigPriceMultiplier,
         uint256 rigMinInitPrice,
@@ -154,42 +119,42 @@ contract Core is Ownable, ReentrancyGuard {
 
     /**
      * @notice Deploy the Core launchpad contract.
+     * @param _weth WETH token address (quote token for all rigs)
      * @param _donutToken DONUT token address
      * @param _uniswapV2Factory Uniswap V2 factory address
      * @param _uniswapV2Router Uniswap V2 router address
      * @param _unitFactory UnitFactory contract address
      * @param _rigFactory RigFactory contract address
      * @param _auctionFactory AuctionFactory contract address
-     * @param _entropy Pyth Entropy contract address
      * @param _protocolFeeAddress Address to receive protocol fees
      * @param _minDonutForLaunch Minimum DONUT required to launch
      */
     constructor(
+        address _weth,
         address _donutToken,
         address _uniswapV2Factory,
         address _uniswapV2Router,
         address _unitFactory,
         address _rigFactory,
         address _auctionFactory,
-        address _entropy,
         address _protocolFeeAddress,
         uint256 _minDonutForLaunch
     ) {
         if (
-            _donutToken == address(0) || _uniswapV2Factory == address(0)
+            _weth == address(0) || _donutToken == address(0) || _uniswapV2Factory == address(0)
                 || _uniswapV2Router == address(0) || _unitFactory == address(0) || _rigFactory == address(0)
-                || _auctionFactory == address(0) || _entropy == address(0)
+                || _auctionFactory == address(0)
         ) {
             revert Core__ZeroAddress();
         }
 
+        weth = _weth;
         donutToken = _donutToken;
         uniswapV2Factory = _uniswapV2Factory;
         uniswapV2Router = _uniswapV2Router;
         unitFactory = _unitFactory;
         rigFactory = _rigFactory;
         auctionFactory = _auctionFactory;
-        entropy = _entropy;
         protocolFeeAddress = _protocolFeeAddress;
         minDonutForLaunch = _minDonutForLaunch;
     }
@@ -210,8 +175,12 @@ contract Core is Ownable, ReentrancyGuard {
         nonReentrant
         returns (address unit, address rig, address auction, address lpToken)
     {
-        // Validate ALL inputs upfront (fail fast before any state changes)
-        _validateLaunchParams(params);
+        // Validate inputs
+        if (params.launcher == address(0)) revert Core__InvalidLauncher();
+        if (params.donutAmount < minDonutForLaunch) revert Core__InsufficientDonut();
+        if (bytes(params.tokenName).length == 0) revert Core__EmptyTokenName();
+        if (bytes(params.tokenSymbol).length == 0) revert Core__EmptyTokenSymbol();
+        if (params.unitAmount == 0) revert Core__InvalidUnitAmount();
 
         // Transfer DONUT from launcher
         IERC20(donutToken).safeTransferFrom(msg.sender, address(this), params.donutAmount);
@@ -254,28 +223,23 @@ contract Core is Ownable, ReentrancyGuard {
         );
 
         // Deploy Rig via factory
-        // Treasury is the Auction contract (receives 15% of mining fees)
         rig = IRigFactory(rigFactory).deploy(
             unit,
-            params.quoteToken,
-            entropy,
-            protocolFeeAddress,
+            weth,
             auction,
+            params.launcher,
+            address(this),
+            params.uri,
+            params.initialUps,
+            params.tailUps,
+            params.halvingPeriod,
             params.rigEpochPeriod,
             params.rigPriceMultiplier,
-            params.rigMinInitPrice,
-            params.initialUps,
-            params.halvingAmount,
-            params.tailUps
+            params.rigMinInitPrice
         );
 
         // Transfer Unit minting rights to Rig (permanently locked since Rig has no setRig function)
         IUnit(unit).setRig(rig);
-
-        // Set initial URI for the rig (logo, description, links, etc.)
-        if (bytes(params.uri).length > 0) {
-            IRig(rig).setUri(params.uri);
-        }
 
         // Transfer Rig ownership to launcher
         IRig(rig).transferOwnership(params.launcher);
@@ -287,11 +251,9 @@ contract Core is Ownable, ReentrancyGuard {
         rigToUnit[rig] = unit;
         rigToAuction[rig] = auction;
         rigToLP[rig] = lpToken;
-        rigToQuote[rig] = params.quoteToken;
 
         emit Core__Launched(
             params.launcher,
-            params.quoteToken,
             unit,
             rig,
             auction,
@@ -303,7 +265,7 @@ contract Core is Ownable, ReentrancyGuard {
             params.unitAmount,
             params.initialUps,
             params.tailUps,
-            params.halvingAmount,
+            params.halvingPeriod,
             params.rigEpochPeriod,
             params.rigPriceMultiplier,
             params.rigMinInitPrice,
@@ -335,57 +297,6 @@ contract Core is Ownable, ReentrancyGuard {
     function setMinDonutForLaunch(uint256 _minDonutForLaunch) external onlyOwner {
         minDonutForLaunch = _minDonutForLaunch;
         emit Core__MinDonutForLaunchSet(_minDonutForLaunch);
-    }
-
-    /*----------  INTERNAL FUNCTIONS  -----------------------------------*/
-
-    /**
-     * @notice Validate all launch parameters upfront to fail fast.
-     * @dev Mirrors validation from Rig and Auction constructors for early revert.
-     * @param params Launch parameters to validate
-     */
-    function _validateLaunchParams(LaunchParams calldata params) internal view {
-        // Basic validations
-        if (params.launcher == address(0)) revert Core__ZeroLauncher();
-        if (params.quoteToken == address(0)) revert Core__ZeroQuoteToken();
-        if (params.donutAmount < minDonutForLaunch) revert Core__InsufficientDonut();
-        if (bytes(params.tokenName).length == 0) revert Core__EmptyTokenName();
-        if (bytes(params.tokenSymbol).length == 0) revert Core__EmptyTokenSymbol();
-        if (params.unitAmount == 0) revert Core__ZeroUnitAmount();
-
-        // Rig parameter validations
-        if (params.rigEpochPeriod < RIG_MIN_EPOCH_PERIOD || params.rigEpochPeriod > RIG_MAX_EPOCH_PERIOD) {
-            revert Core__RigEpochPeriodOutOfRange();
-        }
-        if (params.rigPriceMultiplier < RIG_MIN_PRICE_MULTIPLIER || params.rigPriceMultiplier > RIG_MAX_PRICE_MULTIPLIER) {
-            revert Core__RigPriceMultiplierOutOfRange();
-        }
-        if (params.rigMinInitPrice < RIG_ABS_MIN_INIT_PRICE || params.rigMinInitPrice > RIG_ABS_MAX_INIT_PRICE) {
-            revert Core__RigMinInitPriceOutOfRange();
-        }
-        if (params.initialUps == 0 || params.initialUps > RIG_MAX_INITIAL_UPS) {
-            revert Core__RigInitialUpsOutOfRange();
-        }
-        if (params.tailUps == 0 || params.tailUps > params.initialUps) {
-            revert Core__RigTailUpsOutOfRange();
-        }
-        if (params.halvingAmount == 0 || params.halvingAmount < RIG_MIN_HALVING_AMOUNT) {
-            revert Core__RigHalvingAmountOutOfRange();
-        }
-
-        // Auction parameter validations
-        if (params.auctionEpochPeriod < AUCTION_MIN_EPOCH_PERIOD || params.auctionEpochPeriod > AUCTION_MAX_EPOCH_PERIOD) {
-            revert Core__AuctionEpochPeriodOutOfRange();
-        }
-        if (params.auctionPriceMultiplier < AUCTION_MIN_PRICE_MULTIPLIER || params.auctionPriceMultiplier > AUCTION_MAX_PRICE_MULTIPLIER) {
-            revert Core__AuctionPriceMultiplierOutOfRange();
-        }
-        if (params.auctionMinInitPrice < AUCTION_ABS_MIN_INIT_PRICE || params.auctionMinInitPrice > AUCTION_ABS_MAX_INIT_PRICE) {
-            revert Core__AuctionMinInitPriceOutOfRange();
-        }
-        if (params.auctionInitPrice < params.auctionMinInitPrice || params.auctionInitPrice > AUCTION_ABS_MAX_INIT_PRICE) {
-            revert Core__AuctionInitPriceOutOfRange();
-        }
     }
 
     /*----------  VIEW FUNCTIONS  ---------------------------------------*/

@@ -65,36 +65,27 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         const UnitFactory = await ethers.getContractFactory("UnitFactory");
         unitFactory = await UnitFactory.deploy();
 
-        // Deploy mock Entropy
-        const Entropy = await ethers.getContractFactory("MockEntropy");
-        const entropy = await Entropy.deploy();
-
         // Deploy Core
         const Core = await ethers.getContractFactory("Core");
         core = await Core.deploy(
+            weth.address,
             donut.address,
             uniswapFactory.address,
             uniswapRouter.address,
             unitFactory.address,
             rigFactory.address,
             auctionFactory.address,
-            entropy.address,
             protocol.address,
             convert("100", 18)
         );
 
         // Deploy Multicall
         const Multicall = await ethers.getContractFactory("Multicall");
-        multicall = await Multicall.deploy(core.address, donut.address);
+        multicall = await Multicall.deploy(core.address, weth.address, donut.address);
 
         // Give users DONUT tokens (more for multiple launches)
         for (const user of [user0, user1, user2, user3]) {
             await donut.connect(user).deposit({ value: convert("5000", 18) });
-        }
-
-        // Give users WETH/USDC for mining
-        for (const user of [user0, user1, user2, user3]) {
-            await weth.connect(user).deposit({ value: convert("100", 18) });
         }
     });
 
@@ -105,7 +96,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         it("Can launch a rig through Multicall", async function () {
             const launchParams = {
                 launcher: AddressZero, // Will be overwritten by Multicall
-                quoteToken: weth.address,
                 tokenName: "Multicall Unit",
                 tokenSymbol: "MUNIT",
                 uri: "",
@@ -113,7 +103,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("4", 18),
                 tailUps: convert("0.01", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 2592000,
                 rigEpochPeriod: 3600,
                 rigPriceMultiplier: convert("2", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -150,7 +140,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         it("Launcher param is overwritten with msg.sender", async function () {
             const launchParams = {
                 launcher: user3.address, // Try to set someone else as launcher
-                quoteToken: weth.address,
                 tokenName: "Override Test",
                 tokenSymbol: "OVRD",
                 uri: "",
@@ -158,7 +147,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("1", 18),
                 tailUps: convert("0.01", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 3600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -183,7 +172,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         it("Reverts if DONUT not approved", async function () {
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "No Approve",
                 tokenSymbol: "NOAP",
                 uri: "",
@@ -191,7 +179,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("1", 18),
                 tailUps: convert("0.01", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 3600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -210,14 +198,13 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         it("Reverts with insufficient DONUT balance", async function () {
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "No Balance",
                 tokenSymbol: "NOBAL",
                 uri: "",
                 donutAmount: convert("10000", 18), // More than user has
                 initialUps: convert("1", 18),
                 tailUps: convert("0.01", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 3600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -244,7 +231,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // Launch a fresh rig for mining tests
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Mining Test Unit",
                 tokenSymbol: "MTEST",
                 uri: "",
@@ -252,7 +238,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("10", 18),
                 tailUps: convert("0.1", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 3600,
                 rigPriceMultiplier: convert("2", 18),
                 rigMinInitPrice: convert("0.001", 18),
@@ -272,95 +258,67 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             auction = await ethers.getContractAt("Auction", launchEvent.args.auction);
         });
 
-        it("Can mine with USDC via Multicall", async function () {
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+        it("Can mine with ETH (auto-wrapped to WETH)", async function () {
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
 
-            // Approve USDC for multicall
-            await weth.connect(user1).approve(multicall.address, price.mul(2));
+            const ethBalanceBefore = await ethers.provider.getBalance(user1.address);
 
             const tx = await multicall.connect(user1).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
                 price,
                 "First mine via Multicall",
-                { value: 0 } // No ETH needed unless randomness enabled
+                { value: price.mul(2) } // Send extra ETH
             );
 
-            const slotAfter = await rig.getSlot(0);
-            expect(slotAfter.miner).to.equal(user1.address);
-            expect(slotAfter.uri).to.equal("First mine via Multicall");
+            expect(await rig.epochMiner()).to.equal(user1.address);
+            expect(await rig.epochUri()).to.equal("First mine via Multicall");
         });
 
-        it("Reverts with excess ETH", async function () {
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+        it("Refunds excess ETH as WETH", async function () {
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
 
+            const wethBalanceBefore = await weth.balanceOf(user2.address);
             const excessAmount = convert("1", 18);
 
-            // Approve USDC
-            await weth.connect(user2).approve(multicall.address, price.mul(2));
+            await multicall.connect(user2).mine(
+                rig.address,
+                epochId,
+                deadline,
+                price,
+                "Excess refund test",
+                { value: price.add(excessAmount) }
+            );
 
-            // Should revert since no entropy is required
-            await expect(
-                multicall.connect(user2).mine(
-                    rig.address,
-                    0, // index
-                    epochId,
-                    deadline,
-                    price,
-                    "Excess ETH test",
-                    { value: excessAmount }
-                )
-            ).to.be.revertedWith("Multicall__ExcessETH()");
+            const wethBalanceAfter = await weth.balanceOf(user2.address);
+            // Should have received refund as WETH (approximately the excess)
+            expect(wethBalanceAfter.sub(wethBalanceBefore)).to.be.closeTo(excessAmount, excessAmount.div(100));
         });
 
         it("Previous miner receives Unit tokens after next mine", async function () {
-            // First, user2 must actually become the miner
-            const slot0 = await rig.getSlot(0);
-            const epochId0 = slot0.epochId;
-            const price0 = await rig.getPrice(0);
-            const deadline0 = await getFutureDeadline();
-
-            await weth.connect(user2).approve(multicall.address, price0.mul(2));
-            await multicall.connect(user2).mine(
-                rig.address,
-                0,
-                epochId0,
-                deadline0,
-                price0,
-                "User2 becomes miner",
-                { value: 0 }
-            );
-
+            // user2 is current miner from previous test
             const unitBalanceBefore = await unit.balanceOf(user2.address);
 
             // Wait some time
             await increaseTime(1800);
 
             // user3 mines
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            // Approve USDC
-            await weth.connect(user3).approve(multicall.address, price.mul(2));
 
             await multicall.connect(user3).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
                 price,
                 "Trigger token mint",
-                { value: 0 }
+                { value: price.mul(2) }
             );
 
             const unitBalanceAfter = await unit.balanceOf(user2.address);
@@ -371,16 +329,14 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // Wait for price to decay to zero
             await increaseTime(3700);
 
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             expect(price).to.equal(0);
 
             const deadline = await getFutureDeadline();
 
             await multicall.connect(user1).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
                 0,
@@ -388,88 +344,72 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 { value: 0 }
             );
 
-            const slotAfter = await rig.getSlot(0);
-            expect(slotAfter.miner).to.equal(user1.address);
+            expect(await rig.epochMiner()).to.equal(user1.address);
         });
 
         it("Reverts with wrong epochId", async function () {
             const wrongEpochId = 999;
-            const price = await rig.getPrice(0);
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            await weth.connect(user2).approve(multicall.address, price.mul(2));
 
             await expect(
                 multicall.connect(user2).mine(
                     rig.address,
-                    0, // index
                     wrongEpochId,
                     deadline,
                     price,
                     "Wrong epoch",
-                    { value: 0 }
+                    { value: convert("1", 18) }
                 )
             ).to.be.revertedWith("Rig__EpochIdMismatch()");
         });
 
         it("Reverts with expired deadline", async function () {
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const block = await ethers.provider.getBlock("latest");
             const pastDeadline = block.timestamp - 1;
-
-            await weth.connect(user2).approve(multicall.address, price.mul(2));
 
             await expect(
                 multicall.connect(user2).mine(
                     rig.address,
-                    0, // index
                     epochId,
                     pastDeadline,
                     price,
                     "Expired",
-                    { value: 0 }
+                    { value: convert("1", 18) }
                 )
-            ).to.be.revertedWith("Rig__DeadlinePassed()");
+            ).to.be.revertedWith("Rig__Expired()");
         });
 
         it("Reverts with insufficient maxPrice", async function () {
             // Mine to set up new epoch with higher price
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            await weth.connect(user1).approve(multicall.address, price.mul(2));
 
             await multicall.connect(user1).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
-                price.add(convert("1", 6)),
+                price.add(convert("1", 18)),
                 "Setup",
-                { value: 0 }
+                { value: convert("2", 18) }
             );
 
             // Now try with maxPrice = 0
-            const newSlot = await rig.getSlot(0);
-            const newEpochId = newSlot.epochId;
-            const newPrice = await rig.getPrice(0);
+            const newEpochId = await rig.epochId();
+            const newPrice = await rig.getPrice();
 
             if (newPrice.gt(0)) {
-                await weth.connect(user2).approve(multicall.address, newPrice.mul(2));
-
                 await expect(
                     multicall.connect(user2).mine(
                         rig.address,
-                        0, // index
                         newEpochId,
                         deadline,
                         0, // maxPrice = 0
                         "Should fail",
-                        { value: 0 }
+                        { value: convert("1", 18) }
                     )
                 ).to.be.revertedWith("Rig__MaxPriceExceeded()");
             }
@@ -486,7 +426,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // Launch a fresh rig
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "State Test Unit",
                 tokenSymbol: "STATE",
                 uri: "",
@@ -494,7 +433,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("5", 18),
                 tailUps: convert("0.05", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400 * 7,
                 rigEpochPeriod: 1800,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0005", 18),
@@ -516,58 +455,41 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         });
 
         it("getRig returns correct initial state", async function () {
-            const state = await multicall.getRig(rig.address, 0, user1.address);
-            const slot = await rig.getSlot(0);
+            const state = await multicall.getRig(rig.address, user1.address);
 
-            expect(state.epochId).to.equal(slot.epochId);
-            expect(state.initPrice).to.equal(slot.initPrice);
-            expect(state.epochStartTime).to.equal(slot.startTime);
-            expect(state.ups).to.equal(slot.ups);
-            expect(state.miner).to.equal(slot.miner);
-            expect(state.slotUri).to.equal(slot.uri);
+            expect(state.epochId).to.equal(0);
+            expect(state.initPrice).to.equal(await rig.epochInitPrice());
+            expect(state.epochStartTime).to.equal(await rig.epochStartTime());
+            expect(state.ups).to.equal(await rig.epochUps());
+            expect(state.miner).to.equal(await rig.epochMiner());
+            expect(state.epochUri).to.equal(await rig.epochUri());
         });
 
         it("getRig returns correct user balances", async function () {
-            const state = await multicall.getRig(rig.address, 0, user1.address);
+            const state = await multicall.getRig(rig.address, user1.address);
 
-            expect(state.accountQuoteBalance).to.equal(await weth.balanceOf(user1.address));
-            expect(state.accountDonutBalance).to.equal(await donut.balanceOf(user1.address));
-            expect(state.accountUnitBalance).to.equal(await unit.balanceOf(user1.address));
+            expect(state.ethBalance).to.equal(await ethers.provider.getBalance(user1.address));
+            expect(state.wethBalance).to.equal(await weth.balanceOf(user1.address));
+            expect(state.donutBalance).to.equal(await donut.balanceOf(user1.address));
+            expect(state.unitBalance).to.equal(await unit.balanceOf(user1.address));
         });
 
         it("getRig returns zero balances for zero address", async function () {
-            const state = await multicall.getRig(rig.address, 0, AddressZero);
+            const state = await multicall.getRig(rig.address, AddressZero);
 
-            expect(state.accountQuoteBalance).to.equal(0);
-            expect(state.accountDonutBalance).to.equal(0);
-            expect(state.accountUnitBalance).to.equal(0);
-            expect(state.accountClaimable).to.equal(0);
+            expect(state.ethBalance).to.equal(0);
+            expect(state.wethBalance).to.equal(0);
+            expect(state.donutBalance).to.equal(0);
+            expect(state.unitBalance).to.equal(0);
         });
 
         it("getRig price decays correctly", async function () {
-            // Mine first to reset epoch and get fresh price
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
-            const deadline = await getFutureDeadline();
-
-            await weth.connect(user1).approve(multicall.address, price.mul(2));
-            await multicall.connect(user1).mine(
-                rig.address,
-                0,
-                epochId,
-                deadline,
-                price.mul(2),
-                "Reset epoch",
-                { value: 0 }
-            );
-
-            const stateBefore = await multicall.getRig(rig.address, 0, user1.address);
+            const stateBefore = await multicall.getRig(rig.address, user1.address);
             const priceBefore = stateBefore.price;
 
             await increaseTime(900); // Half epoch
 
-            const stateAfter = await multicall.getRig(rig.address, 0, user1.address);
+            const stateAfter = await multicall.getRig(rig.address, user1.address);
             const priceAfter = stateAfter.price;
 
             // Price should be approximately half
@@ -577,44 +499,39 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
 
         it("getRig glazed increases over time", async function () {
             // Mine first to set a miner
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            await weth.connect(user1).approve(multicall.address, price.mul(2));
 
             await multicall.connect(user1).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
                 price.mul(2),
                 "For glazed test",
-                { value: 0 }
+                { value: price.mul(2) }
             );
 
-            const stateBefore = await multicall.getRig(rig.address, 0, user1.address);
+            const stateBefore = await multicall.getRig(rig.address, user1.address);
 
             await increaseTime(100);
 
-            const stateAfter = await multicall.getRig(rig.address, 0, user1.address);
+            const stateAfter = await multicall.getRig(rig.address, user1.address);
 
             expect(stateAfter.glazed).to.be.gt(stateBefore.glazed);
         });
 
-        it("getRig nextUps unchanged without minting (amount-based halving)", async function () {
-            const stateBefore = await multicall.getRig(rig.address, 0, user1.address);
+        it("getRig nextUps reflects halvings", async function () {
+            const stateBefore = await multicall.getRig(rig.address, user1.address);
             const upsBefore = stateBefore.nextUps;
 
-            // Jump past 7 days - but halving is amount-based, not time-based
+            // Jump past halving period (7 days)
             await increaseTime(86400 * 7 + 1);
 
-            const stateAfter = await multicall.getRig(rig.address, 0, user1.address);
+            const stateAfter = await multicall.getRig(rig.address, user1.address);
             const upsAfter = stateAfter.nextUps;
 
-            // UPS should be unchanged since no tokens were minted
-            expect(upsAfter).to.equal(upsBefore);
+            expect(upsAfter).to.equal(upsBefore.div(2));
         });
 
         it("getAuction returns correct initial state", async function () {
@@ -629,42 +546,39 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         it("getAuction returns correct user balances", async function () {
             const state = await multicall.getAuction(rig.address, user1.address);
 
-            expect(state.accountQuoteBalance).to.equal(await weth.balanceOf(user1.address));
-            expect(state.accountPaymentTokenBalance).to.equal(await lpToken.balanceOf(user1.address));
+            expect(state.wethBalance).to.equal(await weth.balanceOf(user1.address));
+            expect(state.donutBalance).to.equal(await donut.balanceOf(user1.address));
+            expect(state.paymentTokenBalance).to.equal(await lpToken.balanceOf(user1.address));
         });
 
-        it("getAuction quoteAccumulated increases after mining", async function () {
+        it("getAuction wethAccumulated increases after mining", async function () {
             const stateBefore = await multicall.getAuction(rig.address, user1.address);
 
             // Mine to generate fees for treasury (auction)
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
+            const epochId = await rig.epochId();
             const deadline = await getFutureDeadline();
 
             // Wait for reasonable price
             await increaseTime(1700);
-            const price = await rig.getPrice(0);
+            const price = await rig.getPrice();
 
             if (price.gt(0)) {
-                await weth.connect(user2).approve(multicall.address, price.mul(2));
-
                 await multicall.connect(user2).mine(
                     rig.address,
-                    0, // index
                     epochId,
                     deadline,
                     price.mul(2),
                     "Generate fees",
-                    { value: 0 }
+                    { value: price.mul(2) }
                 );
 
                 const stateAfter = await multicall.getAuction(rig.address, user1.address);
-                expect(stateAfter.quoteAccumulated).to.be.gt(stateBefore.quoteAccumulated);
+                expect(stateAfter.wethAccumulated).to.be.gt(stateBefore.wethAccumulated);
             }
         });
 
         it("getRig unitPrice calculated from LP reserves", async function () {
-            const state = await multicall.getRig(rig.address, 0, user1.address);
+            const state = await multicall.getRig(rig.address, user1.address);
 
             // unitPrice = donutInLP * 1e18 / unitInLP
             const donutInLP = await donut.balanceOf(lpToken.address);
@@ -700,7 +614,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // Launch a fresh rig for each test
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Buy Test Unit",
                 tokenSymbol: "BUYTEST",
                 uri: "",
@@ -708,7 +621,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("5", 18),
                 tailUps: convert("0.05", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 1800,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.001", 18),
@@ -728,22 +641,18 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             auction = await ethers.getContractAt("Auction", launchEvent.args.auction);
             lpToken = await ethers.getContractAt("MockLP", launchEvent.args.lpToken);
 
-            // Generate some USDC in the auction via mining
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            // Generate some WETH in the auction via mining
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            await weth.connect(user1).approve(multicall.address, price.mul(2));
 
             await multicall.connect(user1).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
                 price.mul(2),
                 "Generate auction fees",
-                { value: 0 }
+                { value: price.mul(2) }
             );
         });
 
@@ -840,7 +749,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // 1. Launch via Multicall
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Lifecycle Test",
                 tokenSymbol: "LIFE",
                 uri: "",
@@ -848,7 +756,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("100", 18),
                 tailUps: convert("1", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -871,75 +779,67 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             const unit = await ethers.getContractAt("Unit", unitAddr);
 
             // 2. Read initial state via Multicall
-            let state = await multicall.getRig(rigAddr, 0, user1.address);
+            let state = await multicall.getRig(rigAddr, user1.address);
             expect(state.epochId).to.equal(0);
-            // Fresh rig's initial miner is address(0)
-            let slot = await rig.getSlot(0);
-            expect(slot.miner).to.equal(AddressZero);
+            // Fresh rig's initial miner is the launcher
+            const initialMiner = await rig.epochMiner();
+            expect(initialMiner).to.equal(user0.address);
 
             // 3. First user mines via Multicall
-            let epochId = slot.epochId;
-            let price = await rig.getPrice(0);
+            let epochId = await rig.epochId();
+            let price = await rig.getPrice();
             let deadline = await getFutureDeadline();
-
-            await weth.connect(user1).approve(multicall.address, price.mul(2));
 
             await multicall.connect(user1).mine(
                 rigAddr,
-                0, // index
                 epochId,
                 deadline,
                 price.mul(2),
                 "First miner",
-                { value: 0 }
+                { value: price.mul(2) }
             );
 
             // 4. Verify state updated
-            state = await multicall.getRig(rigAddr, 0, user1.address);
+            state = await multicall.getRig(rigAddr, user1.address);
             expect(state.miner).to.equal(user1.address);
-            expect(state.slotUri).to.equal("First miner");
+            expect(state.epochUri).to.equal("First miner");
 
             // 5. Wait and let tokens accumulate
             await increaseTime(300);
 
             // 6. Second user mines, first user gets tokens
-            slot = await rig.getSlot(0);
-            epochId = slot.epochId;
-            price = await rig.getPrice(0);
+            epochId = await rig.epochId();
+            price = await rig.getPrice();
             deadline = await getFutureDeadline();
 
             const user1TokensBefore = await unit.balanceOf(user1.address);
 
-            await weth.connect(user2).approve(multicall.address, price.mul(2));
-
             await multicall.connect(user2).mine(
                 rigAddr,
-                0, // index
                 epochId,
                 deadline,
                 price.mul(2),
                 "Second miner",
-                { value: 0 }
+                { value: price.mul(2) }
             );
 
             const user1TokensAfter = await unit.balanceOf(user1.address);
             expect(user1TokensAfter).to.be.gt(user1TokensBefore);
 
             // 7. Verify updated state via Multicall
-            state = await multicall.getRig(rigAddr, 0, user1.address);
+            state = await multicall.getRig(rigAddr, user1.address);
             expect(state.miner).to.equal(user2.address);
-            expect(state.accountUnitBalance).to.equal(user1TokensAfter);
+            expect(state.unitBalance).to.equal(user1TokensAfter);
 
             // 8. Check auction state via Multicall
             const auctionState = await multicall.getAuction(rigAddr, user1.address);
-            expect(auctionState.quoteAccumulated).to.be.gt(0);
+            expect(auctionState.wethAccumulated).to.be.gt(0);
         });
 
         it("Multiple users mining same rig via Multicall", async function () {
             // Launch rig
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Multi User Test",
                 tokenSymbol: "MULTI",
                 uri: "",
@@ -947,7 +847,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("50", 18),
                 tailUps: convert("0.5", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 600,
                 rigPriceMultiplier: convert("1.2", 18),
                 rigMinInitPrice: convert("0.00001", 18),
@@ -971,21 +871,17 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // Each user mines in sequence
             for (let i = 0; i < 10; i++) {
                 const user = users[i % users.length];
-                const slot = await rig.getSlot(0);
-                const epochId = slot.epochId;
-                const price = await rig.getPrice(0);
+                const epochId = await rig.epochId();
+                const price = await rig.getPrice();
                 const deadline = await getFutureDeadline();
-
-                await weth.connect(user).approve(multicall.address, price.add(convert("1", 6)));
 
                 await multicall.connect(user).mine(
                     rigAddr,
-                    0, // index
                     epochId,
                     deadline,
-                    price.add(convert("1", 6)),
+                    price.add(convert("1", 18)),
                     `Mine ${i}`,
-                    { value: 0 }
+                    { value: price.add(convert("1", 18)) }
                 );
 
                 // Small delay between mines
@@ -1003,7 +899,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             // Launch rig
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Frontend Sim",
                 tokenSymbol: "FRONT",
                 uri: "",
@@ -1011,7 +906,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("10", 18),
                 tailUps: convert("0.1", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -1028,13 +923,13 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             const rigAddr = launchEvent.args.rig;
 
             // Frontend step 1: Get rig state to display
-            const initialState = await multicall.getRig(rigAddr, 0, user2.address);
+            const initialState = await multicall.getRig(rigAddr, user2.address);
 
             console.log("    Initial State:");
             console.log(`      Epoch: ${initialState.epochId}`);
             console.log(`      Price: ${divDec(initialState.price)} ETH`);
             console.log(`      UPS: ${divDec(initialState.ups)}`);
-            console.log(`      User Quote: ${divDec(initialState.accountQuoteBalance)}`);
+            console.log(`      User ETH: ${divDec(initialState.ethBalance)}`);
 
             // Frontend step 2: User decides to mine
             const rig = await ethers.getContractAt("Rig", rigAddr);
@@ -1044,16 +939,15 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
 
             await multicall.connect(user2).mine(
                 rigAddr,
-                0, // index
                 epochId,
                 deadline,
                 price.mul(2),
                 "Frontend mine",
-                { value: 0 }
+                { value: price.mul(2) }
             );
 
             // Frontend step 3: Refresh state
-            const afterMineState = await multicall.getRig(rigAddr, 0, user2.address);
+            const afterMineState = await multicall.getRig(rigAddr, user2.address);
 
             console.log("    After Mine State:");
             console.log(`      Epoch: ${afterMineState.epochId}`);
@@ -1074,7 +968,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         before(async function () {
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Edge Case Test",
                 tokenSymbol: "EDGE",
                 uri: "",
@@ -1082,7 +975,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("5", 18),
                 tailUps: convert("0.05", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -1101,35 +994,31 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         });
 
         it("Mine with exact price (no excess refund)", async function () {
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
 
-            const usdcBefore = await weth.balanceOf(user1.address);
-
-            await weth.connect(user1).approve(multicall.address, price);
+            const wethBefore = await weth.balanceOf(user1.address);
 
             await multicall.connect(user1).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
                 price,
                 "Exact price",
-                { value: 0 }
+                { value: price }
             );
 
-            const usdcAfter = await weth.balanceOf(user1.address);
-            // Should have spent the exact price
-            expect(usdcBefore.sub(usdcAfter)).to.be.closeTo(price, convert("0.001", 6));
+            const wethAfter = await weth.balanceOf(user1.address);
+            // Should receive minimal or no refund
+            expect(wethAfter.sub(wethBefore)).to.be.lte(convert("0.0001", 18));
         });
 
         it("Query non-existent rig reverts", async function () {
             const fakeRig = ethers.Wallet.createRandom().address;
 
             await expect(
-                multicall.getRig(fakeRig, 0, user1.address)
+                multicall.getRig(fakeRig, user1.address)
             ).to.be.reverted;
         });
 
@@ -1143,49 +1032,39 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
 
         it("Rapid sequential mines via Multicall work correctly", async function () {
             for (let i = 0; i < 5; i++) {
-                const slot = await rig.getSlot(0);
-                const epochId = slot.epochId;
-                const price = await rig.getPrice(0);
+                const epochId = await rig.epochId();
+                const price = await rig.getPrice();
                 const deadline = await getFutureDeadline();
-
-                await weth.connect(user1).approve(multicall.address, price.add(convert("1", 6)));
 
                 await multicall.connect(user1).mine(
                     rig.address,
-                    0, // index
                     epochId,
                     deadline,
-                    price.add(convert("1", 6)),
+                    price.add(convert("1", 18)),
                     `Rapid mine ${i}`,
-                    { value: 0 }
+                    { value: price.add(convert("1", 18)) }
                 );
             }
 
-            const slot = await rig.getSlot(0);
-            expect(slot.miner).to.equal(user1.address);
+            expect(await rig.epochMiner()).to.equal(user1.address);
         });
 
         it("Long URI strings work via Multicall", async function () {
             const longUri = "x".repeat(5000);
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            await weth.connect(user2).approve(multicall.address, price.add(convert("1", 6)));
 
             await multicall.connect(user2).mine(
                 rig.address,
-                0, // index
                 epochId,
                 deadline,
-                price.add(convert("1", 6)),
+                price.add(convert("1", 18)),
                 longUri,
-                { value: 0 }
+                { value: price.add(convert("1", 18)) }
             );
 
-            const slotAfter = await rig.getSlot(0);
-            expect(slotAfter.uri).to.equal(longUri);
+            expect(await rig.epochUri()).to.equal(longUri);
         });
     });
 
@@ -1196,7 +1075,6 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
         it("Launch gas cost", async function () {
             const launchParams = {
                 launcher: AddressZero,
-                quoteToken: weth.address,
                 tokenName: "Gas Test",
                 tokenSymbol: "GAS",
                 uri: "",
@@ -1204,7 +1082,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
                 unitAmount: convert("1000000", 18),
                 initialUps: convert("1", 18),
                 tailUps: convert("0.01", 18),
-                halvingAmount: convert("10000000", 18),
+                halvingPeriod: 86400,
                 rigEpochPeriod: 3600,
                 rigPriceMultiplier: convert("1.5", 18),
                 rigMinInitPrice: convert("0.0001", 18),
@@ -1219,7 +1097,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             const receipt = await tx.wait();
 
             console.log(`    Launch gas used: ${receipt.gasUsed.toString()}`);
-            expect(receipt.gasUsed).to.be.lt(7000000); // Reasonable limit
+            expect(receipt.gasUsed).to.be.lt(6000000); // Reasonable limit
         });
 
         it("Mine gas cost", async function () {
@@ -1227,21 +1105,17 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             const rigAddr = await core.deployedRigs(0);
             const rig = await ethers.getContractAt("Rig", rigAddr);
 
-            const slot = await rig.getSlot(0);
-            const epochId = slot.epochId;
-            const price = await rig.getPrice(0);
+            const epochId = await rig.epochId();
+            const price = await rig.getPrice();
             const deadline = await getFutureDeadline();
-
-            await weth.connect(user1).approve(multicall.address, price.add(convert("1", 6)));
 
             const tx = await multicall.connect(user1).mine(
                 rigAddr,
-                0, // index
                 epochId,
                 deadline,
-                price.add(convert("1", 6)),
+                price.add(convert("1", 18)),
                 "Gas test mine",
-                { value: 0 }
+                { value: price.add(convert("1", 18)) }
             );
             const receipt = await tx.wait();
 
@@ -1253,7 +1127,7 @@ describe("Multicall-Only Tests (Frontend Simulation)", function () {
             const rigAddr = await core.deployedRigs(0);
 
             // For view calls, we can estimate gas
-            const gasEstimate = await multicall.estimateGas.getRig(rigAddr, 0, user1.address);
+            const gasEstimate = await multicall.estimateGas.getRig(rigAddr, user1.address);
             console.log(`    getRig estimated gas: ${gasEstimate.toString()}`);
         });
 

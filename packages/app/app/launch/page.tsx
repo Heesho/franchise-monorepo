@@ -1,352 +1,612 @@
 "use client";
 
-import { useState } from "react";
-import { Upload, ChevronDown, ChevronUp } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useReadContract } from "wagmi";
+import { parseEther, formatEther, type Address, encodeFunctionData } from "viem";
+import { Upload, X, Plus, Minus, Share2, PartyPopper } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { NavBar } from "@/components/nav-bar";
+import {
+  CONTRACT_ADDRESSES,
+  MULTICALL_ABI,
+  CORE_ABI,
+  ERC20_ABI,
+  LAUNCH_DEFAULTS,
+} from "@/lib/contracts";
+import { getDonutPrice } from "@/lib/utils";
+import { useFarcaster, shareLaunch } from "@/hooks/useFarcaster";
+import { useBatchedTransaction, encodeApproveCall, type Call } from "@/hooks/useBatchedTransaction";
+import { DEFAULT_CHAIN_ID, DEFAULT_DONUT_PRICE_USD, PRICE_REFETCH_INTERVAL_MS, STALE_TIME_SHORT_MS } from "@/lib/constants";
 
-// Default values based on contract constraints
-// Contract bounds:
-// - rigEpochPeriod: 10 min (600s) to 365 days (31536000s)
-// - rigPriceMultiplier: 1.1x to 3x
-// - rigMinInitPrice: 1e6 minimum (= $1 for USDC with 6 decimals)
-// - initialUps: > 0, max 1e24 (values in 18 decimals, so 1 = 1e18)
-// - tailUps: > 0, <= initialUps
-// - halvingAmount: min 1000 tokens (1000e18)
-const DEFAULTS = {
-  // Liquidity
-  donutAmount: 1000, // 1000 DONUT
-  unitAmount: 1000000, // 1M tokens for LP
-
-  // Mining (Rig)
-  initialUps: 10, // 10 tokens/second starting emission
-  tailUps: 0.1, // 0.1 token/second floor emission
-  halvingAmount: 1000000, // 1M tokens before halving
-  rigEpochPeriod: 3600, // 1 hour epochs
-  rigPriceMultiplier: 2, // 2x price multiplier
-  rigMinInitPrice: 1, // $1 min init price (contract minimum for USDC)
-};
-
-// Slider component
-function Slider({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step = 1,
-  formatValue,
-  description,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  min: number;
-  max: number;
-  step?: number;
-  formatValue?: (value: number) => string;
-  description?: string;
-}) {
-  const displayValue = formatValue ? formatValue(value) : value.toString();
-
+// Animated dots component for loading state
+function LoadingDots() {
   return (
-    <div className="py-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[13px] text-muted-foreground">{label}</span>
-        <span className="text-[13px] font-medium tabular-nums">{displayValue}</span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full h-2 bg-zinc-700 rounded-full appearance-none cursor-pointer accent-white"
-      />
-      {description && (
-        <p className="text-[11px] text-muted-foreground mt-1">{description}</p>
-      )}
-    </div>
+    <span className="inline-flex">
+      <span className="animate-[bounce_1s_infinite_0ms]">.</span>
+      <span className="animate-[bounce_1s_infinite_200ms]">.</span>
+      <span className="animate-[bounce_1s_infinite_400ms]">.</span>
+    </span>
   );
 }
 
 export default function LaunchPage() {
-  // Basic info
+  const router = useRouter();
+
+  // Form state
   const [tokenName, setTokenName] = useState("");
   const [tokenSymbol, setTokenSymbol] = useState("");
   const [tokenDescription, setTokenDescription] = useState("");
-  const [miningMessage, setMiningMessage] = useState("");
+  const [defaultMessage, setDefaultMessage] = useState("");
+  const [links, setLinks] = useState<string[]>([]);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [txStep, setTxStep] = useState<"idle" | "uploading" | "launching">("idle");
 
-  // Advanced settings
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // Fixed 1000 DONUT fee
+  const donutAmountBigInt = parseEther("1000");
+  const [donutUsdPrice, setDonutUsdPrice] = useState<number>(DEFAULT_DONUT_PRICE_USD);
+  const [launchResult, setLaunchResult] = useState<
+    "success" | "failure" | null
+  >(null);
+  const launchResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [launchedToken, setLaunchedToken] = useState<{ name: string; symbol: string } | null>(null);
 
-  // Liquidity
-  const [donutAmount, setDonutAmount] = useState(DEFAULTS.donutAmount);
-  const [unitAmount, setUnitAmount] = useState(DEFAULTS.unitAmount);
+  // Farcaster context and wallet connection
+  const { address, isConnected, connect } = useFarcaster();
 
-  // Mining (Rig)
-  const [initialUps, setInitialUps] = useState(DEFAULTS.initialUps);
-  const [tailUps, setTailUps] = useState(DEFAULTS.tailUps);
-  const [halvingAmount, setHalvingAmount] = useState(DEFAULTS.halvingAmount);
-  const [rigEpochPeriod, setRigEpochPeriod] = useState(DEFAULTS.rigEpochPeriod);
-  const [rigPriceMultiplier, setRigPriceMultiplier] = useState(DEFAULTS.rigPriceMultiplier);
-  const [rigMinInitPrice, setRigMinInitPrice] = useState(DEFAULTS.rigMinInitPrice);
+  // Batched transaction hook for approve + launch
+  const {
+    execute: executeBatch,
+    state: batchState,
+    reset: resetBatch,
+  } = useBatchedTransaction();
+
+  // Get DONUT token address from Core
+  const { data: donutTokenAddress } = useReadContract({
+    address: CONTRACT_ADDRESSES.core as `0x${string}`,
+    abi: CORE_ABI,
+    functionName: "donutToken",
+    chainId: DEFAULT_CHAIN_ID,
+  });
+
+  // Get user's DONUT balance
+  const { data: donutBalance } = useReadContract({
+    address: donutTokenAddress as `0x${string}`,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    chainId: DEFAULT_CHAIN_ID,
+    query: {
+      enabled: !!donutTokenAddress && !!address,
+      refetchInterval: STALE_TIME_SHORT_MS,
+    },
+  });
 
 
-  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setLogoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+  // Fetch DONUT price
+  useEffect(() => {
+    const fetchPrice = async () => {
+      const price = await getDonutPrice();
+      setDonutUsdPrice(price);
+    };
+    fetchPrice();
+    const interval = setInterval(fetchPrice, PRICE_REFETCH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Cleanup timeout
+  useEffect(() => {
+    return () => {
+      if (launchResultTimeoutRef.current) {
+        clearTimeout(launchResultTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const resetLaunchResult = useCallback(() => {
+    if (launchResultTimeoutRef.current) {
+      clearTimeout(launchResultTimeoutRef.current);
+      launchResultTimeoutRef.current = null;
     }
-  };
+    setLaunchResult(null);
+  }, []);
 
-  const isFormValid = tokenName.length > 0 && tokenSymbol.length > 0;
+  const showLaunchResult = useCallback((result: "success" | "failure") => {
+    if (launchResultTimeoutRef.current) {
+      clearTimeout(launchResultTimeoutRef.current);
+    }
+    setLaunchResult(result);
+    launchResultTimeoutRef.current = setTimeout(() => {
+      setLaunchResult(null);
+      launchResultTimeoutRef.current = null;
+    }, 3000);
+  }, []);
 
-  // Format helpers
-  const formatDuration = (seconds: number) => {
-    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-    return `${Math.round(seconds / 86400)}d`;
-  };
+  // Handle batched transaction result
+  useEffect(() => {
+    if (batchState === "success") {
+      showLaunchResult("success");
+      setTxStep("idle");
+      resetBatch();
+      // Save launched token info and show success modal
+      setLaunchedToken({ name: tokenName, symbol: tokenSymbol });
+      setShowSuccessModal(true);
+    } else if (batchState === "error") {
+      showLaunchResult("failure");
+      setTxStep("idle");
+      resetBatch();
+    }
+  }, [batchState, showLaunchResult, resetBatch, tokenName, tokenSymbol]);
 
-  const formatNumber = (n: number) => {
-    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-    return n.toString();
-  };
+  // Handle logo selection (just preview, don't upload yet)
+  const handleLogoSelect = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
 
-  const formatMultiplier = (n: number) => `${n.toFixed(1)}x`;
+      // Validate file type
+      if (!file.type.startsWith("image/")) {
+        alert("Please select an image file");
+        return;
+      }
 
-  const formatPrice = (n: number) => `$${n.toFixed(2)}`;
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        alert("Image must be less than 5MB");
+        return;
+      }
 
-  const formatRate = (n: number) => `${n}/s`;
+      // Store file and show preview
+      setLogoFile(file);
+      const previewUrl = URL.createObjectURL(file);
+      setLogoPreview(previewUrl);
+    },
+    []
+  );
+
+  // Upload logo to IPFS
+  const uploadLogo = useCallback(async (): Promise<string | null> => {
+    if (!logoFile) return null;
+
+    try {
+      const formData = new FormData();
+      formData.append("file", logoFile);
+      if (tokenSymbol.trim()) {
+        formData.append("tokenSymbol", tokenSymbol.trim().toUpperCase());
+      }
+
+      const response = await fetch("/api/pinata/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Upload failed");
+      }
+
+      return data.ipfsUrl;
+    } catch (error) {
+      console.error("Logo upload failed:", error);
+      return null;
+    }
+  }, [logoFile, tokenSymbol]);
+
+  const removeLogo = useCallback(() => {
+    setLogoFile(null);
+    setLogoPreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const addLink = useCallback(() => {
+    setLinks((prev) => [...prev, ""]);
+  }, []);
+
+  const removeLink = useCallback((index: number) => {
+    setLinks((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const updateLink = useCallback((index: number, value: string) => {
+    setLinks((prev) => prev.map((link, i) => (i === index ? value : link)));
+  }, []);
+
+  const userDonutBalance = donutBalance as bigint | undefined;
+
+  const validationError = useMemo(() => {
+    if (!tokenName.trim()) return "Token name is required";
+    if (!tokenSymbol.trim()) return "Token symbol is required";
+    if (tokenSymbol.length > 10) return "Symbol must be 10 characters or less";
+    if (userDonutBalance !== undefined && donutAmountBigInt > userDonutBalance) {
+      return "Insufficient DONUT balance (need 10 DONUT)";
+    }
+    return null;
+  }, [tokenName, tokenSymbol, donutAmountBigInt, userDonutBalance]);
+
+  // Upload metadata to IPFS
+  const uploadMetadata = useCallback(async (imageUri: string): Promise<string | null> => {
+    try {
+      // Filter out empty links
+      const validLinks = links.filter((link) => link.trim() !== "");
+
+      const response = await fetch("/api/pinata/metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: tokenName.trim(),
+          symbol: tokenSymbol.trim().toUpperCase(),
+          image: imageUri,
+          description: tokenDescription.trim(),
+          defaultMessage: defaultMessage.trim() || "gm",
+          links: validLinks,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to upload metadata");
+      }
+
+      const data = await response.json();
+      return data.ipfsUrl;
+    } catch (error) {
+      console.error("Metadata upload failed:", error);
+      return null;
+    }
+  }, [tokenName, tokenSymbol, tokenDescription, defaultMessage, links]);
+
+  const handleLaunch = useCallback(async () => {
+    resetLaunchResult();
+
+    let targetAddress = address;
+    if (!targetAddress) {
+      try {
+        targetAddress = await connect();
+      } catch {
+        showLaunchResult("failure");
+        return;
+      }
+    }
+
+    if (!donutTokenAddress) {
+      showLaunchResult("failure");
+      return;
+    }
+
+    setTxStep("uploading");
+
+    // Upload image first (if any)
+    let imageUri = "";
+    if (logoFile) {
+      const uploadedImageUri = await uploadLogo();
+      if (!uploadedImageUri) {
+        showLaunchResult("failure");
+        setTxStep("idle");
+        return;
+      }
+      imageUri = uploadedImageUri;
+    }
+
+    // Then upload metadata
+    const uploadedMetadataUri = await uploadMetadata(imageUri);
+    if (!uploadedMetadataUri) {
+      showLaunchResult("failure");
+      setTxStep("idle");
+      return;
+    }
+
+    setTxStep("launching");
+
+    // Create batched calls: approve + launch
+    const approveCall = encodeApproveCall(
+      donutTokenAddress as Address,
+      CONTRACT_ADDRESSES.multicall as Address,
+      donutAmountBigInt
+    );
+
+    // Encode launch call
+    const launchParams = {
+      ...LAUNCH_DEFAULTS,
+      launcher: targetAddress,
+      tokenName: tokenName.trim(),
+      tokenSymbol: tokenSymbol.trim().toUpperCase(),
+      uri: uploadedMetadataUri,
+      donutAmount: donutAmountBigInt,
+    };
+
+    const launchCallData = encodeFunctionData({
+      abi: MULTICALL_ABI,
+      functionName: "launch",
+      args: [launchParams],
+    });
+
+    const launchCall: Call = {
+      to: CONTRACT_ADDRESSES.multicall as Address,
+      data: launchCallData,
+    };
+
+    try {
+      await executeBatch([approveCall, launchCall]);
+    } catch (error) {
+      console.error("Launch failed:", error);
+      showLaunchResult("failure");
+      setTxStep("idle");
+      resetBatch();
+    }
+  }, [
+    address,
+    connect,
+    donutTokenAddress,
+    donutAmountBigInt,
+    logoFile,
+    tokenName,
+    tokenSymbol,
+    resetLaunchResult,
+    showLaunchResult,
+    uploadLogo,
+    uploadMetadata,
+    executeBatch,
+    resetBatch,
+  ]);
+
+  const isLaunching = txStep !== "idle" || batchState === "pending" || batchState === "confirming";
+
+  const isLaunchDisabled =
+    !!validationError ||
+    isLaunching ||
+    launchResult !== null ||
+    !isConnected;
 
   return (
-    <main className="flex h-screen w-screen justify-center bg-zinc-800">
+    <main className="flex h-screen w-screen justify-center overflow-hidden bg-background text-foreground">
       <div
-        className="relative flex h-full w-full max-w-[520px] flex-col bg-background"
+        className="relative flex h-full w-full max-w-[520px] flex-1 flex-col overflow-hidden rounded-[28px] bg-background px-4 shadow-inner"
         style={{
-          paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)",
-          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 130px)",
+          paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 72px)",
         }}
       >
-        {/* Header */}
-        <div className="px-4 pb-4">
-          <h1 className="text-2xl font-semibold tracking-tight">Launch</h1>
-        </div>
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Header */}
+          <div className="mb-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Launch</h1>
+          </div>
 
-        {/* Form */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide px-4 pt-2">
-          <div className="space-y-4">
-            {/* Logo + Name + Symbol Row */}
-            <div className="flex items-start gap-4">
-              {/* Logo Upload */}
-              <label className="cursor-pointer flex-shrink-0">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleLogoChange}
-                  className="hidden"
-                />
-                <div className="w-[88px] h-[88px] rounded-xl ring-1 ring-zinc-700 flex items-center justify-center overflow-hidden hover:ring-zinc-500 transition-colors">
+          {/* Launch Form */}
+          <div className="flex-1 overflow-y-auto scrollbar-hide">
+              {/* Logo + Name/Symbol Row */}
+              <div className="flex gap-3">
+                {/* Token Logo Upload */}
+                <div className="flex-shrink-0">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoSelect}
+                    className="hidden"
+                  />
                   {logoPreview ? (
-                    <img
-                      src={logoPreview}
-                      alt="Token logo"
-                      className="w-full h-full object-cover"
-                    />
+                    <div className="relative w-[84px] h-[84px]">
+                      <img
+                        src={logoPreview}
+                        alt="Token logo preview"
+                        className="w-[84px] h-[84px] rounded-lg object-cover bg-secondary"
+                      />
+                      <button
+                        type="button"
+                        onClick={removeLogo}
+                        className="absolute top-1 right-1 w-5 h-5 bg-zinc-700/80 rounded-full flex items-center justify-center hover:bg-zinc-600 transition-colors"
+                      >
+                        <X className="w-3 h-3 text-white" />
+                      </button>
+                    </div>
                   ) : (
-                    <Upload className="w-6 h-6 text-zinc-500" />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-[84px] h-[84px] rounded-lg bg-secondary flex flex-col items-center justify-center gap-1 hover:bg-muted transition-colors border border-border border-dashed"
+                    >
+                      <Upload className="w-5 h-5 text-muted-foreground" />
+                      <span className="text-[10px] text-muted-foreground font-medium">Logo</span>
+                    </button>
                   )}
                 </div>
-              </label>
 
-              {/* Name + Symbol */}
-              <div className="flex-1 min-w-0 space-y-2">
+                {/* Name and Symbol */}
+                <div className="flex-1 flex flex-col gap-2">
+                  {/* Token Name */}
+                  <input
+                    type="text"
+                    value={tokenName}
+                    onChange={(e) => setTokenName(e.target.value)}
+                    placeholder="Token Name"
+                    maxLength={50}
+                    className="w-full rounded-lg bg-secondary px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none border border-border"
+                  />
+
+                  {/* Token Symbol */}
+                  <input
+                    type="text"
+                    value={tokenSymbol}
+                    onChange={(e) =>
+                      setTokenSymbol(e.target.value.toUpperCase())
+                    }
+                    placeholder="SYMBOL"
+                    maxLength={10}
+                    className="w-full rounded-lg bg-secondary px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none border border-border uppercase"
+                  />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="mt-3">
+                <label className="text-[10px] text-muted-foreground mb-1 block">Description</label>
+                <textarea
+                  value={tokenDescription}
+                  onChange={(e) => setTokenDescription(e.target.value)}
+                  placeholder="Tell people about your token..."
+                  maxLength={280}
+                  rows={2}
+                  className="w-full rounded-lg bg-secondary px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none border border-border resize-none"
+                />
+                <div className="text-[9px] text-muted-foreground text-right">{tokenDescription.length}/280</div>
+              </div>
+
+              {/* Default Message */}
+              <div className="mt-2">
+                <label className="text-[10px] text-muted-foreground mb-1 block">Default mine message</label>
                 <input
                   type="text"
-                  placeholder="Token name"
-                  value={tokenName}
-                  onChange={(e) => setTokenName(e.target.value)}
-                  className="w-full h-10 px-3 rounded-lg bg-transparent ring-1 ring-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-zinc-500"
-                />
-                <input
-                  type="text"
-                  placeholder="SYMBOL"
-                  value={tokenSymbol}
-                  onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
-                  maxLength={10}
-                  className="w-full h-10 px-3 rounded-lg bg-transparent ring-1 ring-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-zinc-500"
+                  value={defaultMessage}
+                  onChange={(e) => setDefaultMessage(e.target.value)}
+                  placeholder="gm"
+                  maxLength={100}
+                  className="w-full rounded-lg bg-secondary px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none border border-border"
                 />
               </div>
-            </div>
 
-            {/* Description */}
-            <textarea
-              placeholder="Description (optional)"
-              value={tokenDescription}
-              onChange={(e) => setTokenDescription(e.target.value)}
-              rows={2}
-              className="w-full px-3 py-2 rounded-lg bg-transparent ring-1 ring-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-zinc-500 resize-none text-sm"
-            />
-
-            {/* Mining Message */}
-            <input
-              type="text"
-              placeholder="Mining message (optional)"
-              value={miningMessage}
-              onChange={(e) => setMiningMessage(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg bg-transparent ring-1 ring-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-zinc-500 text-sm"
-            />
-
-            {/* Advanced Settings Toggle */}
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="w-full flex items-center justify-between py-3 text-sm text-zinc-400 hover:text-zinc-300 transition-colors"
-            >
-              <span>Advanced Settings</span>
-              {showAdvanced ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </button>
-
-            {/* Advanced Settings */}
-            {showAdvanced && (
-              <div className="space-y-6 pb-4">
-                {/* Liquidity Section */}
-                <div>
-                  <h3 className="text-[13px] font-semibold text-foreground mb-1">Liquidity</h3>
-                  <Slider
-                    label="DONUT for LP"
-                    value={donutAmount}
-                    onChange={setDonutAmount}
-                    min={1000}
-                    max={100000}
-                    step={1000}
-                    formatValue={formatNumber}
-                    description="DONUT provided for initial liquidity"
-                  />
-                  <Slider
-                    label="Initial Token Supply"
-                    value={unitAmount}
-                    onChange={setUnitAmount}
-                    min={100000}
-                    max={100000000}
-                    step={100000}
-                    formatValue={formatNumber}
-                    description="Tokens minted for initial LP"
-                  />
+              {/* Links Section */}
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] text-muted-foreground">Links</label>
+                  <button
+                    type="button"
+                    onClick={addLink}
+                    className="w-5 h-5 rounded bg-muted flex items-center justify-center hover:bg-muted/80 transition-colors"
+                  >
+                    <Plus className="w-3 h-3 text-muted-foreground" />
+                  </button>
                 </div>
-
-                {/* Emission Section */}
-                <div>
-                  <h3 className="text-[13px] font-semibold text-foreground mb-1">Emission</h3>
-                  <Slider
-                    label="Starting Emission"
-                    value={initialUps}
-                    onChange={(v) => {
-                      setInitialUps(v);
-                      if (tailUps > v) setTailUps(v);
-                    }}
-                    min={1}
-                    max={100}
-                    formatValue={formatRate}
-                    description="Tokens minted per second at launch"
-                  />
-                  <Slider
-                    label="Floor Emission"
-                    value={tailUps}
-                    onChange={setTailUps}
-                    min={0.01}
-                    max={initialUps}
-                    step={0.01}
-                    formatValue={formatRate}
-                    description="Minimum emission rate after halvings"
-                  />
-                  <Slider
-                    label="Halving Threshold"
-                    value={halvingAmount}
-                    onChange={setHalvingAmount}
-                    min={1000}
-                    max={100000000}
-                    step={1000}
-                    formatValue={formatNumber}
-                    description="Tokens minted before emission halves"
-                  />
+                <div className="space-y-2">
+                  {links.map((link, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <input
+                        type="url"
+                        value={link}
+                        onChange={(e) => updateLink(index, e.target.value)}
+                        placeholder="https://"
+                        className="flex-1 rounded-lg bg-secondary px-3 py-1.5 text-xs text-white placeholder-zinc-600 focus:outline-none border border-border"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeLink(index)}
+                        className="w-5 h-5 rounded bg-muted flex items-center justify-center hover:bg-muted/80 transition-colors flex-shrink-0"
+                      >
+                        <Minus className="w-3 h-3 text-muted-foreground" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-
-                {/* Mining Section */}
-                <div>
-                  <h3 className="text-[13px] font-semibold text-foreground mb-1">Mining</h3>
-                  <Slider
-                    label="Epoch Duration"
-                    value={rigEpochPeriod}
-                    onChange={setRigEpochPeriod}
-                    min={600}
-                    max={86400}
-                    step={600}
-                    formatValue={formatDuration}
-                    description="Price resets after each epoch"
-                  />
-                  <Slider
-                    label="Price Multiplier"
-                    value={rigPriceMultiplier}
-                    onChange={setRigPriceMultiplier}
-                    min={1.1}
-                    max={3}
-                    step={0.1}
-                    formatValue={formatMultiplier}
-                    description="Price multiplier when someone mines"
-                  />
-                  <Slider
-                    label="Min Start Price"
-                    value={rigMinInitPrice}
-                    onChange={setRigMinInitPrice}
-                    min={1}
-                    max={100}
-                    step={0.1}
-                    formatValue={formatPrice}
-                    description="Minimum price at epoch start"
-                  />
-                </div>
-
               </div>
-            )}
           </div>
+
+          {/* Spacer for bottom bar */}
+          <div className="h-24" />
         </div>
 
-        {/* Bottom Action Bar */}
-        <div
-          className="fixed bottom-0 left-0 right-0 z-50 bg-background flex justify-center"
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}
-        >
-          <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3">
-            <div>
-              <div className="text-zinc-500 text-[12px]">Launch Fee</div>
-              <div className="font-semibold text-[17px] tabular-nums">
-                {formatNumber(donutAmount)} DONUT
+        {/* Fixed Bottom Action Bar */}
+        <div className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur-sm">
+          <div className="max-w-[520px] mx-auto px-2 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+72px)]">
+            <div className="flex items-center justify-between gap-4">
+              {/* Launch Fee */}
+              <div className="flex-1">
+                <div className="text-xs text-muted-foreground mb-1">Launch fee</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-block w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                    <span className="w-2 h-2 rounded-full bg-black" />
+                  </span>
+                  <span className="text-lg font-semibold text-white">1,000</span>
+                </div>
+                <div className="text-xs text-muted-foreground">~${(donutUsdPrice * 1000).toFixed(2)}</div>
+              </div>
+
+              {/* Balance and Button */}
+              <div className="text-right">
+                <div className="flex items-center justify-end gap-1 text-[10px] text-muted-foreground mb-1">
+                  <span>Balance:</span>
+                  <span className="inline-block w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                    <span className="w-1.5 h-1.5 rounded-full bg-black" />
+                  </span>
+                  <span className="text-white font-medium">
+                    {userDonutBalance
+                      ? Number(formatEther(userDonutBalance)).toLocaleString(undefined, {
+                          maximumFractionDigits: 2,
+                        })
+                      : "0"}
+                  </span>
+                </div>
+                <Button
+                  className="w-[calc(50vw-16px)] max-w-[244px] py-2.5 text-sm font-semibold rounded-lg bg-primary hover:bg-primary/90 text-black transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={handleLaunch}
+                  disabled={isLaunchDisabled}
+                >
+                  {launchResult === "success" ? (
+                    "SUCCESS!"
+                  ) : launchResult === "failure" ? (
+                    "FAILED"
+                  ) : txStep === "uploading" ? (
+                    <>UPLOADING<LoadingDots /></>
+                  ) : txStep === "launching" || batchState === "pending" || batchState === "confirming" ? (
+                    <>LAUNCHING<LoadingDots /></>
+                  ) : (
+                    "LAUNCH"
+                  )}
+                </Button>
               </div>
             </div>
-            <button
-              disabled={!isFormValid}
-              className={`w-32 h-10 text-[14px] font-semibold rounded-xl transition-all ${
-                isFormValid
-                  ? "bg-white text-black hover:bg-zinc-200"
-                  : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-              }`}
-            >
-              Launch
-            </button>
           </div>
         </div>
       </div>
+
+      {/* Success Modal */}
+      {showSuccessModal && launchedToken && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="bg-secondary rounded-2xl p-6 mx-4 max-w-sm w-full text-center">
+            <div className="flex justify-center mb-4">
+              <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+                <PartyPopper className="w-8 h-8 text-foreground" />
+              </div>
+            </div>
+            <h2 className="text-xl font-bold mb-2">Franchise Opened!</h2>
+            <p className="text-muted-foreground mb-6">
+              <span className="text-white font-semibold">${launchedToken.symbol}</span> ({launchedToken.name}) is now live!
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={async () => {
+                  await shareLaunch({
+                    tokenSymbol: launchedToken.symbol,
+                    tokenName: launchedToken.name,
+                    appUrl: window.location.origin,
+                  });
+                }}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-black font-semibold hover:bg-primary/90 transition-colors"
+              >
+                <Share2 className="w-4 h-4" />
+                Share on Farcaster
+              </button>
+              <button
+                onClick={() => {
+                  setShowSuccessModal(false);
+                  router.push("/explore");
+                }}
+                className="w-full py-3 rounded-xl bg-muted text-white font-semibold hover:bg-muted/80 transition-colors"
+              >
+                View Tokens
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <NavBar />
     </main>
   );

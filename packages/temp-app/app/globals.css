@@ -1,0 +1,168 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Minimal dark theme - Blue + Orange accents */
+    --background: 0 0% 0%;
+    --foreground: 0 0% 98%;
+
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 98%;
+
+    /* Primary - white/light for now (grayscale mode) */
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 0%;
+
+    --secondary: 0 0% 9%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 45%;
+
+    --accent: 0 0% 100%;
+    --accent-foreground: 0 0% 0%;
+
+    /* Destructive - muted gray for now */
+    --destructive: 0 0% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 0 0% 100%;
+
+    --radius: 0.75rem;
+
+    /* Semantic colors - grayscale for now */
+    --gain: 0 0% 75%;
+    --loss: 0 0% 45%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    letter-spacing: -0.01em;
+  }
+}
+
+/* Scrollbar */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Safe area padding */
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 16px);
+}
+
+.safe-top {
+  padding-top: max(env(safe-area-inset-top), 12px);
+}
+
+/* Tabular numbers for prices */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Token logo gradients */
+.token-logo {
+  @apply w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold;
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(217 91% 45%) 100%);
+}
+
+.token-logo-secondary {
+  @apply w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold;
+  background: linear-gradient(135deg, hsl(0 0% 20%) 0%, hsl(0 0% 12%) 100%);
+}
+
+/* Card with subtle border */
+.card-elevated {
+  @apply bg-card rounded-xl;
+  border: 1px solid hsl(0 0% 12%);
+}
+
+/* Smooth transitions */
+.transition-smooth {
+  @apply transition-all duration-200 ease-out;
+}
+
+/* List item hover */
+.list-item {
+  @apply flex items-center justify-between py-3.5 px-1 -mx-1 rounded-lg transition-colors;
+}
+
+.list-item:hover {
+  background: hsl(0 0% 8%);
+}
+
+/* Price display */
+.price-large {
+  @apply text-[28px] font-semibold tracking-tight tabular-nums;
+}
+
+.price-medium {
+  @apply text-base font-medium tracking-tight tabular-nums;
+}
+
+.price-small {
+  @apply text-sm tabular-nums;
+}
+
+/* Change badge */
+.change-positive {
+  @apply text-primary text-sm tabular-nums;
+}
+
+.change-negative {
+  @apply text-destructive text-sm tabular-nums;
+}
+
+/* Bump animations */
+@keyframes bump-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  50% {
+    transform: translateY(2px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slide-down {
+  0% {
+    transform: translateY(-60px);
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-bump-in {
+  animation: bump-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.animate-slide-down {
+  animation: slide-down 0.3s ease-out forwards;
+}

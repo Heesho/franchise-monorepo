@@ -9,7 +9,6 @@ pragma solidity 0.8.19;
 interface ICore {
     struct LaunchParams {
         address launcher;
-        address quoteToken;
         string tokenName;
         string tokenSymbol;
         string uri;
@@ -17,7 +16,7 @@ interface ICore {
         uint256 unitAmount;
         uint256 initialUps;
         uint256 tailUps;
-        uint256 halvingAmount;
+        uint256 halvingPeriod;
         uint256 rigEpochPeriod;
         uint256 rigPriceMultiplier;
         uint256 rigMinInitPrice;
@@ -31,17 +30,16 @@ interface ICore {
         external
         returns (address unit, address rig, address auction, address lpToken);
     function protocolFeeAddress() external view returns (address);
+    function weth() external view returns (address);
     function donutToken() external view returns (address);
     function uniswapV2Factory() external view returns (address);
     function uniswapV2Router() external view returns (address);
-    function entropy() external view returns (address);
     function minDonutForLaunch() external view returns (uint256);
     function isDeployedRig(address rig) external view returns (bool);
     function rigToLauncher(address rig) external view returns (address);
     function rigToUnit(address rig) external view returns (address);
     function rigToAuction(address rig) external view returns (address);
     function rigToLP(address rig) external view returns (address);
-    function rigToQuote(address rig) external view returns (address);
     function deployedRigsLength() external view returns (uint256);
     function deployedRigs(uint256 index) external view returns (address);
 }

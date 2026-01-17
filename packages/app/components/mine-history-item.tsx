@@ -14,7 +14,7 @@ type MineHistoryItemProps = {
     price: bigint;
     spent: bigint;
     earned?: bigint;
-    mined?: bigint;
+    minedAmount?: bigint;
     multiplier?: number;
     timestamp: number;
     slotIndex?: number;
@@ -44,9 +44,10 @@ export const MineHistoryItem = memo(function MineHistoryItem({
     if (fid) viewProfile(fid);
   };
 
-  const spent = Number(formatUnits(mine.spent, 6));
-  const earned = mine.earned ? Number(formatUnits(mine.earned, 6)) : null;
-  const mined = mine.mined ? Number(formatUnits(mine.mined, 18)) : null;
+  // spent/earned are in 18 decimals (wei) and represent ETH values
+  const spentEth = Number(formatUnits(mine.spent, 18));
+  const earnedEth = mine.earned ? Number(formatUnits(mine.earned, 18)) : null;
+  const minedAmount = mine.minedAmount ? Number(formatUnits(mine.minedAmount, 18)) : null;
 
   return (
     <div
@@ -90,18 +91,18 @@ export const MineHistoryItem = memo(function MineHistoryItem({
       <div className="flex items-center gap-4 flex-shrink-0 text-right">
         <div>
           <div className="text-[12px] text-muted-foreground">Spent</div>
-          <div className="text-[13px] font-medium">${spent.toFixed(2)}</div>
+          <div className="text-[13px] font-medium">Ξ{spentEth.toFixed(4)}</div>
         </div>
-        {earned !== null && (
+        {earnedEth !== null && earnedEth > 0 && (
           <div>
             <div className="text-[12px] text-muted-foreground">Earned</div>
-            <div className="text-[13px] font-medium">${earned.toFixed(2)}</div>
+            <div className="text-[13px] font-medium">Ξ{earnedEth.toFixed(4)}</div>
           </div>
         )}
-        {mined !== null && (
+        {minedAmount !== null && minedAmount > 0 && (
           <div>
             <div className="text-[12px] text-muted-foreground">Mined</div>
-            <div className="text-[13px] font-medium">{formatNumber(mined)}</div>
+            <div className="text-[13px] font-medium">{formatNumber(minedAmount)}</div>
           </div>
         )}
       </div>

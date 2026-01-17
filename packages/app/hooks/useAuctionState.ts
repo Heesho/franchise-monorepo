@@ -19,7 +19,7 @@ export function useAuctionState(
     chainId: base.id,
     query: {
       enabled: !!rigAddress,
-      refetchInterval: 15_000,
+      refetchInterval: 15_000, // Reduced from 3s to prevent rate limiting
       refetchOnWindowFocus: false,
     },
   });
@@ -37,7 +37,7 @@ export function useAuctionState(
 export type AuctionListItem = {
   rigAddress: `0x${string}`;
   auctionState: AuctionState;
-  profitLoss: bigint; // Quote value - LP cost in DONUT equivalent
+  profitLoss: bigint; // WETH value - LP cost in DONUT equivalent
   isProfitable: boolean;
 };
 
@@ -57,7 +57,7 @@ export function useAllAuctionStates(
     contracts,
     query: {
       enabled: rigAddresses.length > 0,
-      refetchInterval: 30_000,
+      refetchInterval: 30_000, // Reduced from 10s to prevent rate limiting
       refetchOnWindowFocus: false,
     },
   });
@@ -69,14 +69,11 @@ export function useAllAuctionStates(
 
       // Calculate profit/loss
       // LP cost = price * paymentTokenPrice (LP token value in underlying)
-      // Quote value = quoteAccumulated (in USDC, 6 decimals)
-      // For simplicity, compare quote accumulated vs LP price * LP value
-      const lpCostInQuote =
+      // WETH value = wethAccumulated
+      // For simplicity, compare WETH accumulated vs LP price * LP value
+      const lpCostInWeth =
         (state.price * state.paymentTokenPrice) / BigInt(1e18);
-      // Convert LP cost to same decimals as quote (6 decimals)
-      // LP price is in 18 decimals, quote is in 6 decimals
-      const lpCostScaled = lpCostInQuote / BigInt(1e12);
-      const profitLoss = state.quoteAccumulated - lpCostScaled;
+      const profitLoss = state.wethAccumulated - lpCostInWeth;
       const isProfitable = profitLoss > 0n;
 
       return {

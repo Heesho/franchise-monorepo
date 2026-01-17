@@ -4,30 +4,24 @@ import { base } from "wagmi/chains";
 import { createConfig } from "wagmi";
 
 // Backup RPC endpoints for Base mainnet with automatic fallback
-// Order: Primary (env) -> Alchemy (env) -> Public RPCs
+// Order: Primary (env) -> Alchemy (env) -> Public RPCs (no rate-limited defaults)
 const BASE_RPC_ENDPOINTS = [
   // Primary RPC from env
   process.env.NEXT_PUBLIC_BASE_RPC_URL,
   // Alchemy backup from env
   process.env.NEXT_PUBLIC_ALCHEMY_RPC_URL,
-  // Public backup RPCs (ordered by reliability)
+  // Public backup RPCs (reliable, no auth required)
   "https://base.llamarpc.com",
-  "https://base.meowrpc.com",
-  "https://base-pokt.nodies.app",
-  "https://1rpc.io/base",
-  "https://base.drpc.org",
   "https://base-rpc.publicnode.com",
-  "https://rpc.ankr.com/base",
-  "https://base.gateway.tenderly.co",
+  "https://base.drpc.org",
 ].filter((url): url is string => !!url && url !== "");
 
 // Create transport array with retry configuration
 const baseTransports = BASE_RPC_ENDPOINTS.map((url) =>
   http(url, {
-    // Retry configuration for each transport
     retryCount: 2,
-    retryDelay: 1000,
-    timeout: 10_000,
+    retryDelay: 1500,
+    timeout: 15_000,
   })
 );
 
@@ -37,12 +31,12 @@ export const wagmiConfig = createConfig({
   connectors: [farcasterMiniApp()],
   transports: {
     // Fallback transport: tries each RPC in order until one succeeds
-    // rank: true means it will prefer faster RPCs over time
-    [base.id]: fallback(baseTransports, { rank: true }),
+    // rank: false to avoid constant probing of all endpoints
+    [base.id]: fallback(baseTransports, { rank: false }),
   },
   storage: createStorage({
     storage: cookieStorage,
   }),
   // Increased polling interval to reduce request frequency
-  pollingInterval: 15_000,
+  pollingInterval: 30_000,
 });

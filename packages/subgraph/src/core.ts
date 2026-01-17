@@ -30,7 +30,6 @@ export function handleCoreLaunched(event: CoreLaunchedEvent): void {
   rig.launchpad = LAUNCHPAD_ID;
   rig.launcher = event.params.launcher.toHexString();
   rig.unit = event.params.unit;
-  rig.quoteToken = event.params.quoteToken;
   rig.auction = event.params.auction;
   rig.lpToken = event.params.lpToken;
   rig.tokenName = event.params.tokenName;
@@ -40,13 +39,13 @@ export function handleCoreLaunched(event: CoreLaunchedEvent): void {
   // Launch parameters
   rig.initialUps = event.params.initialUps;
   rig.tailUps = event.params.tailUps;
-  rig.halvingAmount = event.params.halvingAmount;
+  rig.halvingPeriod = event.params.halvingPeriod;
   rig.rigEpochPeriod = event.params.rigEpochPeriod;
   rig.rigPriceMultiplier = convertTokenToDecimal(event.params.rigPriceMultiplier, BigInt.fromI32(18));
   rig.rigMinInitPrice = convertTokenToDecimal(event.params.rigMinInitPrice, BigInt.fromI32(18));
 
   // Runtime state
-  rig.capacity = ONE_BI;
+  rig.epochId = ZERO_BI;
   rig.revenue = ZERO_BD;
   rig.teamRevenue = ZERO_BD;
   rig.minted = ZERO_BD;

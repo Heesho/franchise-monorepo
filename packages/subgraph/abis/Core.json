@@ -3,6 +3,11 @@
     "inputs": [
       {
         "internalType": "address",
+        "name": "_weth",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
         "name": "_donutToken",
         "type": "address"
       },
@@ -33,11 +38,6 @@
       },
       {
         "internalType": "address",
-        "name": "_entropy",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
         "name": "_protocolFeeAddress",
         "type": "address"
       },
@@ -49,26 +49,6 @@
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
-  },
-  {
-    "inputs": [],
-    "name": "Core__AuctionEpochPeriodOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__AuctionInitPriceOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__AuctionMinInitPriceOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__AuctionPriceMultiplierOutOfRange",
-    "type": "error"
   },
   {
     "inputs": [],
@@ -87,52 +67,17 @@
   },
   {
     "inputs": [],
-    "name": "Core__RigEpochPeriodOutOfRange",
+    "name": "Core__InvalidLauncher",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "Core__RigHalvingAmountOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__RigInitialUpsOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__RigMinInitPriceOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__RigPriceMultiplierOutOfRange",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__RigTailUpsOutOfRange",
+    "name": "Core__InvalidUnitAmount",
     "type": "error"
   },
   {
     "inputs": [],
     "name": "Core__ZeroAddress",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__ZeroLauncher",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__ZeroQuoteToken",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Core__ZeroUnitAmount",
     "type": "error"
   },
   {
@@ -142,12 +87,6 @@
         "indexed": false,
         "internalType": "address",
         "name": "launcher",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "quoteToken",
         "type": "address"
       },
       {
@@ -219,7 +158,7 @@
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "halvingAmount",
+        "name": "halvingPeriod",
         "type": "uint256"
       },
       {
@@ -315,194 +254,12 @@
   },
   {
     "inputs": [],
-    "name": "AUCTION_ABS_MAX_INIT_PRICE",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "AUCTION_ABS_MIN_INIT_PRICE",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "AUCTION_MAX_EPOCH_PERIOD",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "AUCTION_MAX_PRICE_MULTIPLIER",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "AUCTION_MIN_EPOCH_PERIOD",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "AUCTION_MIN_PRICE_MULTIPLIER",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
     "name": "DEAD_ADDRESS",
     "outputs": [
       {
         "internalType": "address",
         "name": "",
         "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_ABS_MAX_INIT_PRICE",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_ABS_MIN_INIT_PRICE",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_MAX_EPOCH_PERIOD",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_MAX_INITIAL_UPS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_MAX_PRICE_MULTIPLIER",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_MIN_EPOCH_PERIOD",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_MIN_HALVING_AMOUNT",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "RIG_MIN_PRICE_MULTIPLIER",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -567,19 +324,6 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "entropy",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
         "internalType": "address",
@@ -605,11 +349,6 @@
           {
             "internalType": "address",
             "name": "launcher",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "quoteToken",
             "type": "address"
           },
           {
@@ -649,7 +388,7 @@
           },
           {
             "internalType": "uint256",
-            "name": "halvingAmount",
+            "name": "halvingPeriod",
             "type": "uint256"
           },
           {
@@ -843,25 +582,6 @@
         "type": "address"
       }
     ],
-    "name": "rigToQuote",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
     "name": "rigToUnit",
     "outputs": [
       {
@@ -941,6 +661,19 @@
   {
     "inputs": [],
     "name": "unitFactory",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "weth",
     "outputs": [
       {
         "internalType": "address",

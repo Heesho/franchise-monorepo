@@ -97,7 +97,7 @@ export function Leaderboard({
 
   if (isLoading) {
     return (
-      <div className="px-2 mt-6">
+      <div className="mb-6">
         <h2 className="text-[18px] font-semibold mb-3">Leaderboard</h2>
         <div className="space-y-2">
           {[1, 2, 3].map(i => (
@@ -113,7 +113,7 @@ export function Leaderboard({
   }
 
   return (
-    <div className="px-2 mt-6">
+    <div className="mb-6">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-[18px] font-semibold">Leaderboard</h2>
         {userRank && (

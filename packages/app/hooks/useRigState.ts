@@ -14,7 +14,6 @@ export type RigInfo = {
   unitAddress: `0x${string}`;
   auctionAddress: `0x${string}`;
   lpAddress: `0x${string}`;
-  quoteAddress: `0x${string}`;
   launcher: `0x${string}`;
   tokenName: string;
   tokenSymbol: string;
@@ -22,19 +21,18 @@ export type RigInfo = {
 
 export function useRigState(
   rigAddress: `0x${string}` | undefined,
-  account: `0x${string}` | undefined,
-  slotIndex: bigint = 0n // Default to slot 0 for single-slot rigs
+  account: `0x${string}` | undefined
 ) {
   const { data: rawRigState, refetch, isLoading, error } = useReadContract({
     address: CONTRACT_ADDRESSES.multicall as `0x${string}`,
     abi: MULTICALL_ABI,
     functionName: "getRig",
-    args: rigAddress ? [rigAddress, slotIndex, account ?? zeroAddress] : undefined,
+    args: rigAddress ? [rigAddress, account ?? zeroAddress] : undefined,
     chainId: base.id,
     query: {
       enabled: !!rigAddress,
       refetchInterval: 15_000,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: false, // Prevent duplicate requests on tab focus
     },
   });
 
@@ -85,18 +83,6 @@ export function useRigInfo(rigAddress: `0x${string}` | undefined) {
     },
   });
 
-  // Get quote token address
-  const { data: quoteAddress } = useReadContract({
-    address: CONTRACT_ADDRESSES.core as `0x${string}`,
-    abi: CORE_ABI,
-    functionName: "rigToQuote",
-    args: rigAddress ? [rigAddress] : undefined,
-    chainId: base.id,
-    query: {
-      enabled: !!rigAddress,
-    },
-  });
-
   // Get launcher address
   const { data: launcher } = useReadContract({
     address: CONTRACT_ADDRESSES.core as `0x${string}`,
@@ -138,7 +124,6 @@ export function useRigInfo(rigAddress: `0x${string}` | undefined) {
           unitAddress: unitAddress as `0x${string}`,
           auctionAddress: auctionAddress as `0x${string}`,
           lpAddress: lpAddress as `0x${string}`,
-          quoteAddress: (quoteAddress as `0x${string}`) ?? CONTRACT_ADDRESSES.usdc,
           launcher: launcher as `0x${string}`,
           tokenName: (tokenName as string) ?? "",
           tokenSymbol: (tokenSymbol as string) ?? "",

@@ -1,10 +1,11 @@
 export const CONTRACT_ADDRESSES = {
   // Core launchpad contracts
-  core: "0xF837F616Fe1fd33Cd8290759D3ae1FB09230d73b",
-  multicall: "0x9EEbEe08C3823290E7A17F27D4c644380E978cA8",
-  // Token addresses (Mock tokens for staging)
-  usdc: "0xe90495BE187d434e23A9B1FeC0B6Ce039700870e", // Mock USDC
-  donut: "0xD50B69581362C60Ce39596B237C71e07Fc4F6fdA", // Mock DONUT
+  core: "0xA35588D152F45C95f5b152e099647f081BD9F5AB",
+  multicall: "0x5D16A5EB8Ac507eF417A44b8d767104dC52EFa87",
+  // Token addresses
+  weth: "0x4200000000000000000000000000000000000006",
+  donut: "0xae4a37d554c6d6f3e398546d8566b25052e0169c",
+  usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   // Uniswap V2 on Base
   uniV2Router: "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24",
   uniV2Factory: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
@@ -65,13 +66,6 @@ export const CORE_ABI = [
     type: "function",
   },
   {
-    inputs: [{ internalType: "address", name: "", type: "address" }],
-    name: "rigToQuote",
-    outputs: [{ internalType: "address", name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
     inputs: [],
     name: "minDonutForLaunch",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
@@ -92,64 +86,20 @@ export const CORE_ABI = [
     stateMutability: "view",
     type: "function",
   },
-  {
-    inputs: [],
-    name: "entropy",
-    outputs: [{ internalType: "address", name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "uniswapV2Factory",
-    outputs: [{ internalType: "address", name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "uniswapV2Router",
-    outputs: [{ internalType: "address", name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
 ] as const;
 
 // Multicall ABI - for batched operations and state queries
 export const MULTICALL_ABI = [
-  // Mine function - mine a rig slot using quote token (e.g., USDC)
+  // Mine function - mine a rig using ETH (wraps to WETH)
   {
     inputs: [
       { internalType: "address", name: "rig", type: "address" },
-      { internalType: "uint256", name: "index", type: "uint256" },
       { internalType: "uint256", name: "epochId", type: "uint256" },
       { internalType: "uint256", name: "deadline", type: "uint256" },
       { internalType: "uint256", name: "maxPrice", type: "uint256" },
-      { internalType: "string", name: "slotUri", type: "string" },
+      { internalType: "string", name: "uri", type: "string" },
     ],
     name: "mine",
-    outputs: [],
-    stateMutability: "payable",
-    type: "function",
-  },
-  // Mine multiple slots
-  {
-    inputs: [
-      { internalType: "address", name: "rig", type: "address" },
-      {
-        components: [
-          { internalType: "uint256", name: "index", type: "uint256" },
-          { internalType: "uint256", name: "epochId", type: "uint256" },
-          { internalType: "uint256", name: "maxPrice", type: "uint256" },
-          { internalType: "string", name: "slotUri", type: "string" },
-        ],
-        internalType: "struct Multicall.MineParams[]",
-        name: "params",
-        type: "tuple[]",
-      },
-      { internalType: "uint256", name: "deadline", type: "uint256" },
-    ],
-    name: "mineMultiple",
     outputs: [],
     stateMutability: "payable",
     type: "function",
@@ -173,7 +123,6 @@ export const MULTICALL_ABI = [
       {
         components: [
           { internalType: "address", name: "launcher", type: "address" },
-          { internalType: "address", name: "quoteToken", type: "address" },
           { internalType: "string", name: "tokenName", type: "string" },
           { internalType: "string", name: "tokenSymbol", type: "string" },
           { internalType: "string", name: "uri", type: "string" },
@@ -181,7 +130,7 @@ export const MULTICALL_ABI = [
           { internalType: "uint256", name: "unitAmount", type: "uint256" },
           { internalType: "uint256", name: "initialUps", type: "uint256" },
           { internalType: "uint256", name: "tailUps", type: "uint256" },
-          { internalType: "uint256", name: "halvingAmount", type: "uint256" },
+          { internalType: "uint256", name: "halvingPeriod", type: "uint256" },
           { internalType: "uint256", name: "rigEpochPeriod", type: "uint256" },
           { internalType: "uint256", name: "rigPriceMultiplier", type: "uint256" },
           { internalType: "uint256", name: "rigMinInitPrice", type: "uint256" },
@@ -205,11 +154,10 @@ export const MULTICALL_ABI = [
     stateMutability: "nonpayable",
     type: "function",
   },
-  // getRig function - get aggregated rig slot state
+  // getRig function - get aggregated rig state
   {
     inputs: [
       { internalType: "address", name: "rig", type: "address" },
-      { internalType: "uint256", name: "index", type: "uint256" },
       { internalType: "address", name: "account", type: "address" },
     ],
     name: "getRig",
@@ -222,62 +170,19 @@ export const MULTICALL_ABI = [
           { internalType: "uint256", name: "glazed", type: "uint256" },
           { internalType: "uint256", name: "price", type: "uint256" },
           { internalType: "uint256", name: "ups", type: "uint256" },
-          { internalType: "uint256", name: "upsMultiplier", type: "uint256" },
-          { internalType: "address", name: "miner", type: "address" },
-          { internalType: "string", name: "slotUri", type: "string" },
-          { internalType: "bool", name: "needsEntropy", type: "bool" },
-          { internalType: "uint256", name: "entropyFee", type: "uint256" },
           { internalType: "uint256", name: "nextUps", type: "uint256" },
           { internalType: "uint256", name: "unitPrice", type: "uint256" },
+          { internalType: "address", name: "miner", type: "address" },
+          { internalType: "string", name: "epochUri", type: "string" },
           { internalType: "string", name: "rigUri", type: "string" },
-          { internalType: "uint256", name: "capacity", type: "uint256" },
-          { internalType: "uint256", name: "accountQuoteBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountDonutBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountUnitBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountClaimable", type: "uint256" },
+          { internalType: "uint256", name: "ethBalance", type: "uint256" },
+          { internalType: "uint256", name: "wethBalance", type: "uint256" },
+          { internalType: "uint256", name: "donutBalance", type: "uint256" },
+          { internalType: "uint256", name: "unitBalance", type: "uint256" },
         ],
         internalType: "struct Multicall.RigState",
         name: "state",
         type: "tuple",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-  // getRigMultiple function - get multiple slots' state
-  {
-    inputs: [
-      { internalType: "address", name: "rig", type: "address" },
-      { internalType: "uint256[]", name: "indices", type: "uint256[]" },
-      { internalType: "address", name: "account", type: "address" },
-    ],
-    name: "getRigMultiple",
-    outputs: [
-      {
-        components: [
-          { internalType: "uint256", name: "epochId", type: "uint256" },
-          { internalType: "uint256", name: "initPrice", type: "uint256" },
-          { internalType: "uint256", name: "epochStartTime", type: "uint256" },
-          { internalType: "uint256", name: "glazed", type: "uint256" },
-          { internalType: "uint256", name: "price", type: "uint256" },
-          { internalType: "uint256", name: "ups", type: "uint256" },
-          { internalType: "uint256", name: "upsMultiplier", type: "uint256" },
-          { internalType: "address", name: "miner", type: "address" },
-          { internalType: "string", name: "slotUri", type: "string" },
-          { internalType: "bool", name: "needsEntropy", type: "bool" },
-          { internalType: "uint256", name: "entropyFee", type: "uint256" },
-          { internalType: "uint256", name: "nextUps", type: "uint256" },
-          { internalType: "uint256", name: "unitPrice", type: "uint256" },
-          { internalType: "string", name: "rigUri", type: "string" },
-          { internalType: "uint256", name: "capacity", type: "uint256" },
-          { internalType: "uint256", name: "accountQuoteBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountDonutBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountUnitBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountClaimable", type: "uint256" },
-        ],
-        internalType: "struct Multicall.RigState[]",
-        name: "states",
-        type: "tuple[]",
       },
     ],
     stateMutability: "view",
@@ -299,9 +204,10 @@ export const MULTICALL_ABI = [
           { internalType: "address", name: "paymentToken", type: "address" },
           { internalType: "uint256", name: "price", type: "uint256" },
           { internalType: "uint256", name: "paymentTokenPrice", type: "uint256" },
-          { internalType: "uint256", name: "quoteAccumulated", type: "uint256" },
-          { internalType: "uint256", name: "accountQuoteBalance", type: "uint256" },
-          { internalType: "uint256", name: "accountPaymentTokenBalance", type: "uint256" },
+          { internalType: "uint256", name: "wethAccumulated", type: "uint256" },
+          { internalType: "uint256", name: "wethBalance", type: "uint256" },
+          { internalType: "uint256", name: "donutBalance", type: "uint256" },
+          { internalType: "uint256", name: "paymentTokenBalance", type: "uint256" },
         ],
         internalType: "struct Multicall.AuctionState",
         name: "state",
@@ -311,24 +217,17 @@ export const MULTICALL_ABI = [
     stateMutability: "view",
     type: "function",
   },
-  // estimateMineMultipleCost function
-  {
-    inputs: [
-      { internalType: "address", name: "rig", type: "address" },
-      { internalType: "uint256[]", name: "indices", type: "uint256[]" },
-    ],
-    name: "estimateMineMultipleCost",
-    outputs: [
-      { internalType: "uint256", name: "totalEntropyFee", type: "uint256" },
-      { internalType: "uint256", name: "totalQuoteNeeded", type: "uint256" },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
   // Core and token addresses
   {
     inputs: [],
     name: "core",
+    outputs: [{ internalType: "address", name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "weth",
     outputs: [{ internalType: "address", name: "", type: "address" }],
     stateMutability: "view",
     type: "function",
@@ -403,54 +302,29 @@ export const ERC20_ABI = [
 
 // Rig contract ABI - for direct rig reads if needed
 export const RIG_ABI = [
-  // Mine function - mine a rig slot
   {
-    inputs: [
-      { internalType: "address", name: "miner", type: "address" },
-      { internalType: "uint256", name: "index", type: "uint256" },
-      { internalType: "uint256", name: "epochId", type: "uint256" },
-      { internalType: "uint256", name: "deadline", type: "uint256" },
-      { internalType: "uint256", name: "maxPrice", type: "uint256" },
-      { internalType: "string", name: "_uri", type: "string" },
-    ],
-    name: "mine",
-    outputs: [{ internalType: "uint256", name: "price", type: "uint256" }],
-    stateMutability: "payable",
-    type: "function",
-  },
-  // Claim function - claim accumulated miner fees (pull pattern)
-  {
-    inputs: [{ internalType: "address", name: "account", type: "address" }],
-    name: "claim",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-  {
-    inputs: [{ internalType: "uint256", name: "index", type: "uint256" }],
-    name: "getSlot",
-    outputs: [
-      {
-        components: [
-          { internalType: "uint256", name: "epochId", type: "uint256" },
-          { internalType: "uint256", name: "initPrice", type: "uint256" },
-          { internalType: "uint256", name: "startTime", type: "uint256" },
-          { internalType: "uint256", name: "ups", type: "uint256" },
-          { internalType: "uint256", name: "upsMultiplier", type: "uint256" },
-          { internalType: "uint256", name: "lastUpsMultiplierTime", type: "uint256" },
-          { internalType: "address", name: "miner", type: "address" },
-          { internalType: "string", name: "uri", type: "string" },
-        ],
-        internalType: "struct IRig.Slot",
-        name: "",
-        type: "tuple",
-      },
-    ],
+    inputs: [],
+    name: "epochId",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
   },
   {
-    inputs: [{ internalType: "uint256", name: "index", type: "uint256" }],
+    inputs: [],
+    name: "initPrice",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "epochStartTime",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
     name: "getPrice",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "view",
@@ -465,8 +339,15 @@ export const RIG_ABI = [
   },
   {
     inputs: [],
-    name: "capacity",
+    name: "ups",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "miner",
+    outputs: [{ internalType: "address", name: "", type: "address" }],
     stateMutability: "view",
     type: "function",
   },
@@ -528,7 +409,7 @@ export const RIG_ABI = [
   },
   {
     inputs: [],
-    name: "halvingAmount",
+    name: "halvingPeriod",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
@@ -550,55 +431,6 @@ export const RIG_ABI = [
   {
     inputs: [],
     name: "minInitPrice",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "isRandomnessEnabled",
-    outputs: [{ internalType: "bool", name: "", type: "bool" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "upsMultiplierDuration",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "getEntropyFee",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [{ internalType: "address", name: "account", type: "address" }],
-    name: "accountToClaimable",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "totalMinted",
-    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "getUpsMultipliers",
-    outputs: [{ internalType: "uint256[]", name: "", type: "uint256[]" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "getUpsMultipliersLength",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
@@ -680,19 +512,15 @@ export type RigState = {
   glazed: bigint;
   price: bigint;
   ups: bigint;
-  upsMultiplier: bigint;
-  miner: `0x${string}`;
-  slotUri: string;
-  needsEntropy: boolean;
-  entropyFee: bigint;
   nextUps: bigint;
   unitPrice: bigint;
+  miner: `0x${string}`;
+  epochUri: string;
   rigUri: string;
-  capacity: bigint;
-  accountQuoteBalance: bigint;
-  accountDonutBalance: bigint;
-  accountUnitBalance: bigint;
-  accountClaimable: bigint;
+  ethBalance: bigint;
+  wethBalance: bigint;
+  donutBalance: bigint;
+  unitBalance: bigint;
 };
 
 export type AuctionState = {
@@ -702,14 +530,14 @@ export type AuctionState = {
   paymentToken: `0x${string}`;
   price: bigint;
   paymentTokenPrice: bigint;
-  quoteAccumulated: bigint;
-  accountQuoteBalance: bigint;
-  accountPaymentTokenBalance: bigint;
+  wethAccumulated: bigint;
+  wethBalance: bigint;
+  donutBalance: bigint;
+  paymentTokenBalance: bigint;
 };
 
 export type LaunchParams = {
   launcher: `0x${string}`;
-  quoteToken: `0x${string}`;
   tokenName: string;
   tokenSymbol: string;
   uri: string;
@@ -717,7 +545,7 @@ export type LaunchParams = {
   unitAmount: bigint;
   initialUps: bigint;
   tailUps: bigint;
-  halvingAmount: bigint;
+  halvingPeriod: bigint;
   rigEpochPeriod: bigint;
   rigPriceMultiplier: bigint;
   rigMinInitPrice: bigint;
@@ -727,17 +555,16 @@ export type LaunchParams = {
   auctionMinInitPrice: bigint;
 };
 
-// Default launch parameters (using USDC as quote token)
+// Default launch parameters
 export const LAUNCH_DEFAULTS = {
-  quoteToken: CONTRACT_ADDRESSES.usdc as `0x${string}`,
   uri: "", // metadata URI for the unit token (can be set later by team)
   unitAmount: BigInt("10000000000000000000000"), // 10000 tokens (10000e18)
   initialUps: BigInt("4000000000000000000"), // 4 tokens/sec
   tailUps: BigInt("10000000000000000"), // 0.01 tokens/sec
-  halvingAmount: BigInt("1000000000000000000000000"), // 1M tokens for halving
+  halvingPeriod: BigInt(30 * 24 * 60 * 60), // 30 days
   rigEpochPeriod: BigInt(60 * 60), // 1 hour
   rigPriceMultiplier: BigInt("2000000000000000000"), // 2x (2e18)
-  rigMinInitPrice: BigInt("100000"), // 0.1 USDC (6 decimals)
+  rigMinInitPrice: BigInt("100000000000000"), // 0.0001 ETH
   auctionInitPrice: BigInt("1000000000000000000000"), // 1000 LP tokens
   auctionEpochPeriod: BigInt(24 * 60 * 60), // 24 hours
   auctionPriceMultiplier: BigInt("1200000000000000000"), // 1.2x (1.2e18)
@@ -803,6 +630,3 @@ export const UNIV2_PAIR_ABI = [
     type: "function",
   },
 ] as const;
-
-// Quote token decimals (USDC = 6)
-export const QUOTE_TOKEN_DECIMALS = 6;

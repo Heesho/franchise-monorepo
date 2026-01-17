@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createChart, ColorType, LineSeries, AreaSeries, type IChartApi, type ISeriesApi, type LineData, type AreaData, type Time, LineStyle } from "lightweight-charts";
+import { createChart, ColorType, AreaSeries, type IChartApi, type ISeriesApi, type Time } from "lightweight-charts";
 
 export type HoverData = {
   time: number;
@@ -15,7 +15,8 @@ type PriceChartProps = {
   height?: number;
   onHover?: (data: HoverData) => void;
   timeframeSeconds?: number;
-  tokenFirstActiveTime?: number | null; // When the token first had activity (for determining if gray padding is needed)
+  tokenFirstActiveTime?: number | null;
+  currentPrice?: number; // Current price to append as last data point
 };
 
 export function PriceChart({
@@ -26,10 +27,16 @@ export function PriceChart({
   onHover,
   timeframeSeconds,
   tokenFirstActiveTime,
+  currentPrice,
 }: PriceChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [mounted, setMounted] = useState(false);
+
+  const onHoverRef = useRef(onHover);
+  useEffect(() => {
+    onHoverRef.current = onHover;
+  }, [onHover]);
 
   useEffect(() => {
     const timer = setTimeout(() => setMounted(true), 100);
@@ -62,13 +69,13 @@ export function PriceChart({
         },
         width: width,
         height: height,
-        handleScroll: true,
-        handleScale: true,
+        handleScroll: false,
+        handleScale: false,
         rightPriceScale: {
           visible: false,
           scaleMargins: {
             top: 0.1,
-            bottom: 0.15, // Ensure bottom (0 value) is visible
+            bottom: 0.15,
           },
         },
         timeScale: { visible: false, borderVisible: false },
@@ -88,109 +95,91 @@ export function PriceChart({
       });
 
       const now = Math.floor(Date.now() / 1000);
-      const realData = data.filter(d => d.value > 0);
 
-      // Calculate cutoff for the timeframe
-      const cutoff = timeframeSeconds && timeframeSeconds !== Infinity
-        ? now - timeframeSeconds
-        : (realData.length > 0 ? realData[0].time - 3600 : now - 86400);
+      // Determine time range
+      const tokenBirthTime = tokenFirstActiveTime ?? now;
 
-      // Determine if we need gray padding - ONLY if the TOKEN is younger than the timeframe
-      const tokenBirthTime = tokenFirstActiveTime ?? (realData.length > 0 ? realData[0].time : now);
-      const needsGrayPadding = timeframeSeconds && timeframeSeconds !== Infinity && tokenBirthTime > cutoff + 60;
-
-      const BASELINE = 0.0001;
-      let areaSeries: ISeriesApi<"Area"> | null = null;
-
-      // 1. INVISIBLE anchor series spanning full timeframe (forces correct scaling)
+      let startTime: number;
       if (timeframeSeconds && timeframeSeconds !== Infinity) {
-        const anchorSeries = chart.addSeries(LineSeries, {
-          color: "rgba(0,0,0,0)",
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-          visible: false,
-        });
-        anchorSeries.setData([
-          { time: cutoff as Time, value: BASELINE },
-          { time: now as Time, value: BASELINE },
-        ]);
+        startTime = now - timeframeSeconds;
+      } else {
+        startTime = tokenBirthTime;
       }
 
-      // 2. Gray dotted line ONLY for empty period (before token existed)
-      if (needsGrayPadding) {
-        const grayData: LineData<Time>[] = [];
-        const emptyPeriod = tokenBirthTime - cutoff;
-        const numPoints = Math.max(2, Math.min(30, Math.floor(emptyPeriod / 3600)));
+      // Step 1: Dedupe and sort the input data
+      const dataMap = new Map<number, number>();
+      data.forEach(d => {
+        if (d.value > 0) dataMap.set(d.time, d.value);
+      });
+      const sortedData = Array.from(dataMap.entries()).sort((a, b) => a[0] - b[0]);
 
-        for (let i = 0; i <= numPoints; i++) {
-          const t = cutoff + (emptyPeriod * i / numPoints);
-          grayData.push({ time: Math.floor(t) as Time, value: BASELINE });
+      // Step 2: Build the final data array
+      const filledData: { time: Time; value: number }[] = [];
+
+      // Step 3: For timeframe views (1D, 1W, 1M), fill hourly 0s from startTime to first data point
+      if (timeframeSeconds && timeframeSeconds !== Infinity) {
+        const firstDataTime = sortedData.length > 0 ? sortedData[0][0] : now;
+        const HOUR = 3600;
+        for (let t = startTime; t < firstDataTime; t += HOUR) {
+          filledData.push({ time: t as Time, value: 0 });
         }
-
-        const graySeries = chart.addSeries(LineSeries, {
-          color: "#71717a",
-          lineWidth: 2,
-          lineStyle: LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        graySeries.setData(grayData);
       }
 
-      // 3. Purple area series for actual data
-      if (realData.length > 0) {
-        areaSeries = chart.addSeries(AreaSeries, {
-          lineColor: color,
-          topColor: `${color}40`,
-          bottomColor: `${color}00`,
-          lineWidth: 2,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        areaSeries.setData(realData.map(d => ({ time: d.time as Time, value: d.value })));
+      // Step 4: Add all actual data points
+      sortedData.forEach(([time, value]) => {
+        if (time >= startTime && time <= now) {
+          filledData.push({ time: time as Time, value });
+        }
+      });
+
+      // Step 5: Add current price at the end (the real-time dropping price)
+      if (currentPrice !== undefined) {
+        filledData.push({ time: now as Time, value: currentPrice });
       }
+
+      // Dedupe by time (keep last value for duplicates)
+      const finalMap = new Map<number, number>();
+      filledData.forEach(d => finalMap.set(d.time as number, d.value));
+      const dedupedData = Array.from(finalMap.entries())
+        .map(([time, value]) => ({ time: time as Time, value }))
+        .sort((a, b) => (a.time as number) - (b.time as number));
+
+      // Create area series
+      const areaSeries = chart.addSeries(AreaSeries, {
+        lineColor: color,
+        topColor: `${color}40`,
+        bottomColor: `${color}00`,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      areaSeries.setData(dedupedData);
 
       chart.timeScale().fitContent();
       chartRef.current = chart;
 
       // Handle hover
       chart.subscribeCrosshairMove((param) => {
-        if (!onHover) return;
+        if (!onHoverRef.current) return;
 
         if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
-          onHover(null);
+          onHoverRef.current(null);
           return;
         }
 
-        // Check if we're in the gray/empty area (before first real data)
-        const hoverTime = param.time as number;
-        if (realData.length > 0 && hoverTime < realData[0].time) {
-          onHover({
-            time: hoverTime,
+        const seriesData = param.seriesData.get(areaSeries);
+        if (seriesData && "value" in seriesData) {
+          onHoverRef.current({
+            time: param.time as number,
+            value: seriesData.value as number,
+          });
+        } else {
+          onHoverRef.current({
+            time: param.time as number,
             value: 0,
           });
-          return;
         }
-
-        if (areaSeries) {
-          const seriesData = param.seriesData.get(areaSeries);
-          if (seriesData && "value" in seriesData) {
-            onHover({
-              time: param.time as number,
-              value: seriesData.value as number,
-            });
-            return;
-          }
-        }
-
-        onHover({
-          time: param.time as number,
-          value: 0,
-        });
       });
 
     } catch (error) {
@@ -211,7 +200,7 @@ export function PriceChart({
         chartRef.current = null;
       }
     };
-  }, [mounted, color, height, data, isLoading, onHover, timeframeSeconds, tokenFirstActiveTime]);
+  }, [mounted, color, height, data, isLoading, timeframeSeconds, tokenFirstActiveTime, currentPrice]);
 
   return (
     <div style={{ height }} className="w-full relative overflow-hidden">

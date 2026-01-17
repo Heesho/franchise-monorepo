@@ -3,7 +3,7 @@ import { GraphQLClient, gql } from "graphql-request";
 // Subgraph URL (Goldsky)
 export const LAUNCHPAD_SUBGRAPH_URL =
   process.env.NEXT_PUBLIC_LAUNCHPAD_SUBGRAPH_URL ||
-  "https://api.goldsky.com/api/public/project_cmgscxhw81j5601xmhgd42rej/subgraphs/mineport/1.0.0/gn";
+  "https://api.goldsky.com/api/public/project_cmgscxhw81j5601xmhgd42rej/subgraphs/miner-launchpad/1.0.0/gn";
 
 const client = new GraphQLClient(LAUNCHPAD_SUBGRAPH_URL);
 
@@ -16,16 +16,6 @@ export type SubgraphLaunchpad = {
   protocolRevenue: string;
 };
 
-export type SubgraphSlot = {
-  id: string; // {rigAddress}-{slotIndex}
-  index: string;
-  epochId: string;
-  currentMiner: { id: string } | null;
-  uri: string;
-  minted: string;
-  lastMined: string;
-};
-
 export type SubgraphRig = {
   id: string;
   launchpad: { id: string };
@@ -35,14 +25,13 @@ export type SubgraphRig = {
   lpToken: string; // Bytes address
   tokenName: string;
   tokenSymbol: string;
-  capacity: string; // Number of slots
+  epochId: string;
   revenue: string;
   teamRevenue: string;
   minted: string;
   lastMined: string;
   createdAt: string;
   createdAtBlock: string;
-  slots?: SubgraphSlot[];
 };
 
 export type SubgraphAccount = {
@@ -61,34 +50,15 @@ export type SubgraphRigAccount = {
 };
 
 export type SubgraphEpoch = {
-  id: string; // {rigAddress}-{slotIndex}-{epochId}
+  id: string; // {rigAddress}-{epochId}
   rig: { id: string };
-  slot: { id: string; index: string };
   rigAccount: { id: string; account: { id: string } };
-  index: string; // Slot index
-  epochId: string;
   uri: string;
   startTime: string;
+  initPrice: string;
   mined: string;
   spent: string;
   earned: string;
-};
-
-// Mine event for activity feed (with aggregated data)
-export type SubgraphMineEvent = {
-  id: string; // {rigAddress}-{slotIndex}-{epochId}
-  rig: { id: string };
-  miner: { id: string };
-  prevMiner: { id: string } | null;
-  slotIndex: string;
-  epochId: string;
-  uri: string;
-  price: string; // What new miner paid
-  mined: string; // Tokens minted for prev miner
-  earned: string; // Fee earned by prev miner
-  upsMultiplier: string | null;
-  timestamp: string;
-  blockNumber: string;
 };
 
 // Queries
@@ -132,11 +102,10 @@ export const GET_RIGS_QUERY = gql`
       lpToken
       tokenName
       tokenSymbol
-      capacity
+      epochId
       revenue
       teamRevenue
       minted
-      lastMined
       createdAt
       createdAtBlock
     }
@@ -170,11 +139,10 @@ export const SEARCH_RIGS_QUERY = gql`
       lpToken
       tokenName
       tokenSymbol
-      capacity
+      epochId
       revenue
       teamRevenue
       minted
-      lastMined
       createdAt
       createdAtBlock
     }
@@ -197,24 +165,12 @@ export const GET_RIG_QUERY = gql`
       lpToken
       tokenName
       tokenSymbol
-      capacity
+      epochId
       revenue
       teamRevenue
       minted
-      lastMined
       createdAt
       createdAtBlock
-      slots {
-        id
-        index
-        epochId
-        currentMiner {
-          id
-        }
-        uri
-        minted
-        lastMined
-      }
     }
   }
 `;
@@ -222,7 +178,7 @@ export const GET_RIG_QUERY = gql`
 // Get epochs (mining history) for a rig
 export const GET_EPOCHS_QUERY = gql`
   query GetEpochs($rigId: String!, $first: Int!, $skip: Int!) {
-    epochs(
+    epoches(
       where: { rig_: { id: $rigId } }
       orderBy: startTime
       orderDirection: desc
@@ -233,20 +189,15 @@ export const GET_EPOCHS_QUERY = gql`
       rig {
         id
       }
-      slot {
-        id
-        index
-      }
       rigAccount {
         id
         account {
           id
         }
       }
-      index
-      epochId
       uri
       startTime
+      initPrice
       mined
       spent
       earned
@@ -257,7 +208,7 @@ export const GET_EPOCHS_QUERY = gql`
 // Get all recent epochs (for debugging/general feed)
 export const GET_ALL_EPOCHS_QUERY = gql`
   query GetAllEpochs($first: Int!, $skip: Int!) {
-    epochs(
+    epoches(
       orderBy: startTime
       orderDirection: desc
       first: $first
@@ -267,88 +218,18 @@ export const GET_ALL_EPOCHS_QUERY = gql`
       rig {
         id
       }
-      slot {
-        id
-        index
-      }
       rigAccount {
         id
         account {
           id
         }
       }
-      index
-      epochId
       uri
       startTime
+      initPrice
       mined
       spent
       earned
-    }
-  }
-`;
-
-// Get mine events for a rig (activity feed with aggregated data)
-export const GET_MINES_QUERY = gql`
-  query GetMines($rigId: String!, $first: Int!, $skip: Int!) {
-    mines(
-      where: { rig_: { id: $rigId } }
-      orderBy: timestamp
-      orderDirection: desc
-      first: $first
-      skip: $skip
-    ) {
-      id
-      rig {
-        id
-      }
-      miner {
-        id
-      }
-      prevMiner {
-        id
-      }
-      slotIndex
-      epochId
-      uri
-      price
-      mined
-      earned
-      upsMultiplier
-      timestamp
-      blockNumber
-    }
-  }
-`;
-
-// Get all recent mines (global activity feed)
-export const GET_ALL_MINES_QUERY = gql`
-  query GetAllMines($first: Int!, $skip: Int!) {
-    mines(
-      orderBy: timestamp
-      orderDirection: desc
-      first: $first
-      skip: $skip
-    ) {
-      id
-      rig {
-        id
-      }
-      miner {
-        id
-      }
-      prevMiner {
-        id
-      }
-      slotIndex
-      epochId
-      uri
-      price
-      mined
-      earned
-      upsMultiplier
-      timestamp
-      blockNumber
     }
   }
 `;
@@ -430,7 +311,7 @@ export const GET_TRENDING_RIGS_QUERY = gql`
       lpToken
       tokenName
       tokenSymbol
-      capacity
+      epochId
       revenue
       teamRevenue
       minted
@@ -457,11 +338,10 @@ export const GET_TOP_RIGS_QUERY = gql`
       lpToken
       tokenName
       tokenSymbol
-      capacity
+      epochId
       revenue
       teamRevenue
       minted
-      lastMined
       createdAt
       createdAtBlock
     }
@@ -471,7 +351,7 @@ export const GET_TOP_RIGS_QUERY = gql`
 // Get recent epochs (for top rigs by latest epoch spent)
 export const GET_RECENT_EPOCHS_QUERY = gql`
   query GetRecentEpochs($first: Int!) {
-    epochs(first: $first, orderBy: startTime, orderDirection: desc) {
+    epoches(first: $first, orderBy: startTime, orderDirection: desc) {
       id
       rig {
         id
@@ -486,11 +366,10 @@ export const GET_RECENT_EPOCHS_QUERY = gql`
         lpToken
         tokenName
         tokenSymbol
-        capacity
+        epochId
         revenue
         teamRevenue
         minted
-        lastMined
         createdAt
         createdAtBlock
       }
@@ -516,7 +395,7 @@ export async function getLaunchpadStats(): Promise<SubgraphLaunchpad | null> {
 export async function getRigs(
   first = 20,
   skip = 0,
-  orderBy: "minted" | "createdAt" | "lastMined" | "revenue" = "minted",
+  orderBy: "minted" | "createdAt" | "epochId" | "revenue" = "minted",
   orderDirection: "asc" | "desc" = "desc"
 ): Promise<SubgraphRig[]> {
   try {
@@ -570,7 +449,7 @@ export async function getEpochs(
   skip = 0
 ): Promise<SubgraphEpoch[]> {
   try {
-    const data = await client.request<{ epochs: SubgraphEpoch[] }>(
+    const data = await client.request<{ epoches: SubgraphEpoch[] }>(
       GET_EPOCHS_QUERY,
       {
         rigId: rigId.toLowerCase(),
@@ -578,7 +457,7 @@ export async function getEpochs(
         skip,
       }
     );
-    return data.epochs ?? [];
+    return data.epoches ?? [];
   } catch (error) {
     console.error("[getEpochs] Error:", error);
     return [];
@@ -590,57 +469,15 @@ export async function getAllEpochs(
   skip = 0
 ): Promise<SubgraphEpoch[]> {
   try {
-    const data = await client.request<{ epochs: SubgraphEpoch[] }>(
+    const data = await client.request<{ epoches: SubgraphEpoch[] }>(
       GET_ALL_EPOCHS_QUERY,
       {
         first,
         skip,
       }
     );
-    return data.epochs ?? [];
+    return data.epoches ?? [];
   } catch {
-    return [];
-  }
-}
-
-// Get mine events for a rig (simple activity feed)
-export async function getMines(
-  rigId: string,
-  first = 50,
-  skip = 0
-): Promise<SubgraphMineEvent[]> {
-  try {
-    const data = await client.request<{ mines: SubgraphMineEvent[] }>(
-      GET_MINES_QUERY,
-      {
-        rigId: rigId.toLowerCase(),
-        first,
-        skip,
-      }
-    );
-    return data.mines ?? [];
-  } catch (error) {
-    console.error("[getMines] Error:", error);
-    return [];
-  }
-}
-
-// Get all recent mines (global activity feed)
-export async function getAllMines(
-  first = 50,
-  skip = 0
-): Promise<SubgraphMineEvent[]> {
-  try {
-    const data = await client.request<{ mines: SubgraphMineEvent[] }>(
-      GET_ALL_MINES_QUERY,
-      {
-        first,
-        skip,
-      }
-    );
-    return data.mines ?? [];
-  } catch (error) {
-    console.error("[getAllMines] Error:", error);
     return [];
   }
 }
@@ -717,7 +554,7 @@ export async function getTopRigs(first = 20): Promise<SubgraphRig[]> {
   try {
     // Fetch epochs sorted by startTime (most recent first)
     // We fetch more epochs than needed to ensure we get enough unique rigs
-    const data = await client.request<{ epochs: EpochWithRig[] }>(
+    const data = await client.request<{ epoches: EpochWithRig[] }>(
       GET_RECENT_EPOCHS_QUERY,
       { first: first * 10 }
     );
@@ -725,7 +562,7 @@ export async function getTopRigs(first = 20): Promise<SubgraphRig[]> {
     // Deduplicate by rig, keeping only the FIRST (latest) epoch for each rig
     const rigMap = new Map<string, { rig: SubgraphRig; spent: number }>();
 
-    for (const epoch of data.epochs) {
+    for (const epoch of data.epoches) {
       const rigId = epoch.rig.id.toLowerCase();
       const spentAmount = parseFloat(epoch.spent);
 

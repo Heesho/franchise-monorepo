@@ -24,28 +24,28 @@ export const TokenStats = memo(function TokenStats({
   volume24h,
 }: TokenStatsProps) {
   return (
-    <div className="px-2 mt-6">
+    <div className="mb-6">
       <h2 className="text-[18px] font-semibold mb-3">Stats</h2>
       <div className="grid grid-cols-2 gap-x-8 gap-y-3">
         <div>
-          <div className="text-[12px] text-muted-foreground">Market cap</div>
-          <div className="text-[13px] font-medium">{formatUsd(marketCap, true)}</div>
+          <div className="text-xs text-muted-foreground">Market cap</div>
+          <div className="text-sm font-semibold">{formatUsd(marketCap, true)}</div>
         </div>
         <div>
-          <div className="text-[12px] text-muted-foreground">Total supply</div>
-          <div className="text-[13px] font-medium">
+          <div className="text-xs text-muted-foreground">Total supply</div>
+          <div className="text-sm font-semibold">
             {totalSupply.toLocaleString(undefined, { maximumFractionDigits: 0 })}
           </div>
         </div>
         <div>
-          <div className="text-[12px] text-muted-foreground">Liquidity</div>
-          <div className="text-[13px] font-medium">
+          <div className="text-xs text-muted-foreground">Liquidity</div>
+          <div className="text-sm font-semibold">
             {liquidity > 0 ? formatUsd(liquidity, true) : "—"}
           </div>
         </div>
         <div>
-          <div className="text-[12px] text-muted-foreground">24h volume</div>
-          <div className="text-[13px] font-medium">
+          <div className="text-xs text-muted-foreground">24h volume</div>
+          <div className="text-sm font-semibold">
             {volume24h > 0 ? formatUsd(volume24h, true) : "—"}
           </div>
         </div>

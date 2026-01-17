@@ -47,12 +47,16 @@ contract Auction is ReentrancyGuard {
     error Auction__EpochIdMismatch();
     error Auction__MaxPaymentAmountExceeded();
     error Auction__EmptyAssets();
-    error Auction__ZeroPaymentToken();
-    error Auction__ZeroPaymentReceiver();
-    error Auction__InitPriceOutOfRange();
-    error Auction__EpochPeriodOutOfRange();
-    error Auction__PriceMultiplierOutOfRange();
-    error Auction__MinInitPriceOutOfRange();
+    error Auction__InvalidPaymentToken();
+    error Auction__InvalidPaymentReceiver();
+    error Auction__InitPriceBelowMin();
+    error Auction__InitPriceExceedsMax();
+    error Auction__EpochPeriodBelowMin();
+    error Auction__EpochPeriodExceedsMax();
+    error Auction__PriceMultiplierBelowMin();
+    error Auction__PriceMultiplierExceedsMax();
+    error Auction__MinInitPriceBelowMin();
+    error Auction__MinInitPriceExceedsAbsMaxInitPrice();
 
     /*----------  EVENTS  -----------------------------------------------*/
 
@@ -77,12 +81,16 @@ contract Auction is ReentrancyGuard {
         uint256 _priceMultiplier,
         uint256 _minInitPrice
     ) {
-        if (_paymentToken == address(0)) revert Auction__ZeroPaymentToken();
-        if (_paymentReceiver == address(0)) revert Auction__ZeroPaymentReceiver();
-        if (_initPrice < _minInitPrice || _initPrice > ABS_MAX_INIT_PRICE) revert Auction__InitPriceOutOfRange();
-        if (_epochPeriod < MIN_EPOCH_PERIOD || _epochPeriod > MAX_EPOCH_PERIOD) revert Auction__EpochPeriodOutOfRange();
-        if (_priceMultiplier < MIN_PRICE_MULTIPLIER || _priceMultiplier > MAX_PRICE_MULTIPLIER) revert Auction__PriceMultiplierOutOfRange();
-        if (_minInitPrice < ABS_MIN_INIT_PRICE || _minInitPrice > ABS_MAX_INIT_PRICE) revert Auction__MinInitPriceOutOfRange();
+        if (_paymentToken == address(0)) revert Auction__InvalidPaymentToken();
+        if (_paymentReceiver == address(0)) revert Auction__InvalidPaymentReceiver();
+        if (_initPrice < _minInitPrice) revert Auction__InitPriceBelowMin();
+        if (_initPrice > ABS_MAX_INIT_PRICE) revert Auction__InitPriceExceedsMax();
+        if (_epochPeriod < MIN_EPOCH_PERIOD) revert Auction__EpochPeriodBelowMin();
+        if (_epochPeriod > MAX_EPOCH_PERIOD) revert Auction__EpochPeriodExceedsMax();
+        if (_priceMultiplier < MIN_PRICE_MULTIPLIER) revert Auction__PriceMultiplierBelowMin();
+        if (_priceMultiplier > MAX_PRICE_MULTIPLIER) revert Auction__PriceMultiplierExceedsMax();
+        if (_minInitPrice < ABS_MIN_INIT_PRICE) revert Auction__MinInitPriceBelowMin();
+        if (_minInitPrice > ABS_MAX_INIT_PRICE) revert Auction__MinInitPriceExceedsAbsMaxInitPrice();
 
         initPrice = _initPrice;
         startTime = block.timestamp;
@@ -126,11 +134,9 @@ contract Auction is ReentrancyGuard {
         }
 
         // Transfer all accumulated assets to buyer
-        uint256 assetsLength = assets.length;
-        for (uint256 i = 0; i < assetsLength;) {
+        for (uint256 i = 0; i < assets.length; i++) {
             uint256 balance = IERC20(assets[i]).balanceOf(address(this));
             IERC20(assets[i]).safeTransfer(assetsReceiver, balance);
-            unchecked { ++i; }
         }
 
         // Calculate next epoch's starting price

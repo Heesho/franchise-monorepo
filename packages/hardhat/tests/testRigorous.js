@@ -30,7 +30,6 @@ async function launchFreshRig(launcher, params = {}) {
   await ensureDonut(launcher, convert("50", 18));
   const defaultParams = {
     launcher: launcher.address,
-    quoteToken: weth.address,
     tokenName: "Test Unit",
     tokenSymbol: "TUNIT",
     uri: "",
@@ -38,7 +37,7 @@ async function launchFreshRig(launcher, params = {}) {
     unitAmount: convert("1000000", 18),
     initialUps: convert("4", 18),
     tailUps: convert("0.01", 18),
-    halvingAmount: convert("10000000", 18),
+    halvingPeriod: 86400 * 30,
     rigEpochPeriod: 3600,
     rigPriceMultiplier: convert("2", 18),
     rigMinInitPrice: convert("0.0001", 18),
@@ -63,23 +62,18 @@ async function launchFreshRig(launcher, params = {}) {
 }
 
 // Helper to mine a rig
-async function mineRig(rigAddress, miner, rigRecipient = null, index = 0) {
+async function mineRig(rigAddress, miner, rigRecipient = null) {
   const rigContract = await ethers.getContractAt("Rig", rigAddress);
-  const slot = await rigContract.getSlot(index);
-  const epochId = slot.epochId;
-  const price = await rigContract.getPrice(index);
+  const epochId = await rigContract.epochId();
+  const price = await rigContract.getPrice();
   const deadline = await getFutureDeadline();
 
-  // Ensure miner has enough WETH
-  const balance = await weth.balanceOf(miner.address);
-  if (balance.lt(price.mul(2))) {
-    await weth.connect(miner).deposit({ value: convert("10", 18) });
-  }
+  await weth.connect(miner).deposit({ value: convert("10", 18) });
   await weth.connect(miner).approve(rigAddress, price.mul(2));
 
   const tx = await rigContract
     .connect(miner)
-    .mine(rigRecipient || miner.address, index, epochId, deadline, price.mul(2), "");
+    .mine(rigRecipient || miner.address, epochId, deadline, price.mul(2), "");
 
   return tx;
 }
@@ -116,27 +110,23 @@ describe("Rigorous Tests", function () {
     const unitFactoryArtifact = await ethers.getContractFactory("UnitFactory");
     const unitFactory = await unitFactoryArtifact.deploy();
 
-    // Deploy mock Entropy
-    const entropyArtifact = await ethers.getContractFactory("MockEntropy");
-    const entropy = await entropyArtifact.deploy();
-
     // Deploy Core
     const coreArtifact = await ethers.getContractFactory("Core");
     core = await coreArtifact.deploy(
+      weth.address,
       donut.address,
       uniswapFactory.address,
       uniswapRouter.address,
       unitFactory.address,
       rigFactory.address,
       auctionFactory.address,
-      entropy.address,
       protocol.address,
       convert("5", 18)
     );
 
     // Deploy Multicall
     const multicallArtifact = await ethers.getContractFactory("Multicall");
-    multicall = await multicallArtifact.deploy(core.address, donut.address);
+    multicall = await multicallArtifact.deploy(core.address, weth.address, donut.address);
 
     // Mint tokens to users
     for (const user of [user0, user1, user2, user3, user4]) {
@@ -159,7 +149,7 @@ describe("Rigorous Tests", function () {
     });
 
     it("getRig returns unitPrice in DONUT terms", async function () {
-      const state = await multicall.getRig(testRig, 0, user1.address);
+      const state = await multicall.getRig(testRig, user1.address);
 
       // unitPrice should be DONUT/Unit ratio from LP
       // Since LP was created with DONUT, unitPrice should be > 0
@@ -177,10 +167,10 @@ describe("Rigorous Tests", function () {
     });
 
     it("getRig returns user donutBalance", async function () {
-      const state = await multicall.getRig(testRig, 0, user1.address);
+      const state = await multicall.getRig(testRig, user1.address);
       const actualDonutBalance = await donut.balanceOf(user1.address);
 
-      expect(state.accountDonutBalance).to.equal(actualDonutBalance);
+      expect(state.donutBalance).to.equal(actualDonutBalance);
     });
 
     it("getAuction returns paymentTokenPrice in DONUT terms", async function () {
@@ -197,19 +187,15 @@ describe("Rigorous Tests", function () {
       }
     });
 
-    it("getAuction returns user paymentTokenBalance", async function () {
+    it("getAuction returns user donutBalance", async function () {
       const state = await multicall.getAuction(testRig, user1.address);
-      const auctionAddr = await core.rigToAuction(testRig);
-      const auction = await ethers.getContractAt("IAuction", auctionAddr);
-      const lpToken = await auction.paymentToken();
-      const lpContract = await ethers.getContractAt("IERC20", lpToken);
-      const actualLpBalance = await lpContract.balanceOf(user1.address);
+      const actualDonutBalance = await donut.balanceOf(user1.address);
 
-      expect(state.accountPaymentTokenBalance).to.equal(actualLpBalance);
+      expect(state.donutBalance).to.equal(actualDonutBalance);
     });
 
     it("Pricing updates after mining activity", async function () {
-      const stateBefore = await multicall.getRig(testRig, 0, user1.address);
+      const stateBefore = await multicall.getRig(testRig, user1.address);
 
       // Mine to trigger token minting and fee distribution
       await mineRig(testRig, user1);
@@ -220,26 +206,27 @@ describe("Rigorous Tests", function () {
 
       await mineRig(testRig, user2);
 
-      const stateAfter = await multicall.getRig(testRig, 0, user1.address);
+      const stateAfter = await multicall.getRig(testRig, user1.address);
 
       // Unit balance should have changed
-      expect(stateAfter.accountUnitBalance).to.be.gt(stateBefore.accountUnitBalance);
+      expect(stateAfter.unitBalance).to.be.gt(stateBefore.unitBalance);
     });
 
     it("Zero address skips all balance queries", async function () {
-      const state = await multicall.getRig(testRig, 0, AddressZero);
+      const state = await multicall.getRig(testRig, AddressZero);
 
-      expect(state.accountQuoteBalance).to.equal(0);
-      expect(state.accountDonutBalance).to.equal(0);
-      expect(state.accountUnitBalance).to.equal(0);
-      expect(state.accountClaimable).to.equal(0);
+      expect(state.ethBalance).to.equal(0);
+      expect(state.wethBalance).to.equal(0);
+      expect(state.donutBalance).to.equal(0);
+      expect(state.unitBalance).to.equal(0);
     });
 
     it("getAuction zero address skips balance queries", async function () {
       const state = await multicall.getAuction(testRig, AddressZero);
 
-      expect(state.accountQuoteBalance).to.equal(0);
-      expect(state.accountPaymentTokenBalance).to.equal(0);
+      expect(state.wethBalance).to.equal(0);
+      expect(state.donutBalance).to.equal(0);
+      expect(state.paymentTokenBalance).to.equal(0);
     });
   });
 
@@ -255,43 +242,31 @@ describe("Rigorous Tests", function () {
       await network.provider.send("evm_increaseTime", [600]);
       await network.provider.send("evm_mine");
 
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
       expect(price).to.equal(0);
 
       // Should be able to mine at zero price
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
+      const epochId = await rigContract.epochId();
       const deadline = await getFutureDeadline();
-      await rigContract.connect(user1).mine(user1.address, 0, epochId, deadline, 0, "");
+      await rigContract.connect(user1).mine(user1.address, epochId, deadline, 0, "");
 
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(user1.address);
+      expect(await rigContract.epochMiner()).to.equal(user1.address);
     });
 
-    it("Mining triggers halving when threshold crossed (amount-based)", async function () {
-      // Halving is now based on totalMinted, not time
+    it("Mining at exact halving boundary", async function () {
       const result = await launchFreshRig(user0, {
-        initialUps: convert("1000", 18), // High UPS for fast minting
+        initialUps: convert("8", 18),
         tailUps: convert("1", 18),
-        halvingAmount: convert("1000", 18), // MIN_HALVING_AMOUNT
+        halvingPeriod: 86400, // 1 day (MIN_HALVING_PERIOD)
       });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      // Initial UPS should be 1000
-      let ups = await rigContract.getUps();
-      expect(ups).to.equal(convert("1000", 18));
-
-      // Mine to set up miner, then wait to mint tokens and cross halving threshold
-      await mineRig(result.rig, user1);
-      // Wait a short time to mint ~1000-2000 tokens (will cross at least 1 halving threshold)
-      await network.provider.send("evm_increaseTime", [1]);
+      // Check UPS at exactly halving boundary
+      await network.provider.send("evm_increaseTime", [86400]);
       await network.provider.send("evm_mine");
-      await mineRig(result.rig, user2);
 
-      // Should have halved at least once (UPS should be less than initial)
-      ups = await rigContract.getUps();
-      expect(ups).to.be.lt(convert("1000", 18)); // Halving occurred
-      expect(ups).to.be.gte(convert("1", 18)); // But not below tailUps
+      const ups = await rigContract.getUps();
+      expect(ups).to.equal(convert("4", 18)); // Should be halved exactly once
     });
 
     it("Very small price calculations don't underflow", async function () {
@@ -306,7 +281,7 @@ describe("Rigorous Tests", function () {
       await network.provider.send("evm_mine");
 
       // Should handle small prices without reverting
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
       expect(price).to.be.gte(0);
     });
 
@@ -314,7 +289,7 @@ describe("Rigorous Tests", function () {
       const result = await launchFreshRig(user0, {
         initialUps: convert("1000000", 18), // 1M tokens per second
         tailUps: convert("1000", 18),
-        halvingAmount: convert("10000000", 18),
+        halvingPeriod: 86400,
       });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
       const unitContract = await ethers.getContractAt("Unit", await rigContract.unit());
@@ -341,13 +316,11 @@ describe("Rigorous Tests", function () {
 
       // First mine
       await mineRig(result.rig, user1);
-      const slotAfterFirst = await rigContract.getSlot(0);
-      const epochAfterFirst = slotAfterFirst.epochId;
+      const epochAfterFirst = await rigContract.epochId();
 
       // Second mine immediately after
       await mineRig(result.rig, user2);
-      const slotAfterSecond = await rigContract.getSlot(0);
-      const epochAfterSecond = slotAfterSecond.epochId;
+      const epochAfterSecond = await rigContract.epochId();
 
       expect(epochAfterSecond).to.equal(epochAfterFirst.add(1));
     });
@@ -356,14 +329,13 @@ describe("Rigorous Tests", function () {
       const result = await launchFreshRig(user0, { rigEpochPeriod: 1000 });
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      const slot = await rigContract.getSlot(0);
-      const initPrice = slot.initPrice;
+      const initPrice = await rigContract.epochInitPrice();
 
       // Fast forward 99% through epoch
       await network.provider.send("evm_increaseTime", [990]);
       await network.provider.send("evm_mine");
 
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
 
       // Price should be approximately 1% of init price
       const expectedPrice = initPrice.div(100);
@@ -374,17 +346,16 @@ describe("Rigorous Tests", function () {
       const result = await launchFreshRig(user0);
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       const maxDeadline = ethers.constants.MaxUint256;
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(result.rig, price);
 
       // Should not revert with max deadline
-      await rigContract.connect(user1).mine(user1.address, 0, epochId, maxDeadline, price, "");
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(user1.address);
+      await rigContract.connect(user1).mine(user1.address, epochId, maxDeadline, price, "");
+      expect(await rigContract.epochMiner()).to.equal(user1.address);
     });
   });
 
@@ -398,17 +369,16 @@ describe("Rigorous Tests", function () {
 
       // Mining to the Core contract (which likely has no receive function)
       // This tests that the system handles various recipient types
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
-      const price = await rigContract.getPrice(0);
+      const epochId = await rigContract.epochId();
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
+      await weth.connect(user1).deposit({ value: convert("1", 18) });
       await weth.connect(user1).approve(result.rig, price);
 
       // Should work - ERC20 transfers don't have reentrancy issues like ETH
-      await rigContract.connect(user1).mine(core.address, 0, epochId, deadline, price, "");
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(core.address);
+      await rigContract.connect(user1).mine(core.address, epochId, deadline, price, "");
+      expect(await rigContract.epochMiner()).to.equal(core.address);
     });
 
     it("Fee distribution cannot be manipulated by recipient", async function () {
@@ -418,34 +388,34 @@ describe("Rigorous Tests", function () {
       // First mine
       await mineRig(result.rig, user1);
 
-      // Get expected balances (miner fees go to claimable mapping)
-      const user1ClaimableBefore = await rigContract.accountToClaimable(user1.address);
+      // Get expected balances
+      const user1WethBefore = await weth.balanceOf(user1.address);
 
-      // Second mine - user1 should receive fees in claimable
+      // Second mine - user1 should receive fees
       await mineRig(result.rig, user2);
 
-      const user1ClaimableAfter = await rigContract.accountToClaimable(user1.address);
+      const user1WethAfter = await weth.balanceOf(user1.address);
 
-      // User1 should have received their 80% share in claimable
-      expect(user1ClaimableAfter).to.be.gt(user1ClaimableBefore);
+      // User1 should have received their 80% share
+      expect(user1WethAfter).to.be.gt(user1WethBefore);
     });
 
     it("Cannot replay same epochId after mine", async function () {
       const result = await launchFreshRig(user0);
       const rigContract = await ethers.getContractAt("Rig", result.rig);
 
-      const slot = await rigContract.getSlot(0);
-      const epochId = slot.epochId;
+      const epochId = await rigContract.epochId();
       await mineRig(result.rig, user1);
 
       // Try to mine with old epochId
-      const price = await rigContract.getPrice(0);
+      const price = await rigContract.getPrice();
       const deadline = await getFutureDeadline();
 
+      await weth.connect(user2).deposit({ value: convert("1", 18) });
       await weth.connect(user2).approve(result.rig, price);
 
       await expect(
-        rigContract.connect(user2).mine(user2.address, 0, epochId, deadline, price, "")
+        rigContract.connect(user2).mine(user2.address, epochId, deadline, price, "")
       ).to.be.revertedWith("Rig__EpochIdMismatch()");
     });
 
@@ -476,7 +446,7 @@ describe("Rigorous Tests", function () {
       const result = await launchFreshRig(user0, {
         initialUps: convert("100", 18),
         tailUps: convert("10", 18),
-        halvingAmount: convert("10000000", 18), // 1 day (MIN_HALVING_PERIOD)
+        halvingPeriod: 86400, // 1 day (MIN_HALVING_PERIOD)
         rigEpochPeriod: 600,
       });
 
@@ -486,14 +456,12 @@ describe("Rigorous Tests", function () {
 
       // Verify initial state
       expect(await rigContract.getUps()).to.equal(convert("100", 18));
-      let slot = await rigContract.getSlot(0);
-      expect(slot.epochId).to.equal(0);
+      expect(await rigContract.epochId()).to.equal(0);
 
       // First mine
       await mineRig(result.rig, user1);
-      slot = await rigContract.getSlot(0);
-      expect(slot.miner).to.equal(user1.address);
-      expect(slot.epochId).to.equal(1);
+      expect(await rigContract.epochMiner()).to.equal(user1.address);
+      expect(await rigContract.epochId()).to.equal(1);
 
       // Wait and verify token accrual
       await network.provider.send("evm_increaseTime", [10]);
@@ -506,9 +474,11 @@ describe("Rigorous Tests", function () {
 
       expect(user1BalanceAfter).to.be.gt(user1BalanceBefore);
 
-      // Halving is amount-based, not time-based
-      // UPS should still be at 100 since we haven't minted halvingAmount tokens yet
-      expect(await rigContract.getUps()).to.equal(convert("100", 18));
+      // Trigger halving (1 day)
+      await network.provider.send("evm_increaseTime", [86400]);
+      await network.provider.send("evm_mine");
+
+      expect(await rigContract.getUps()).to.equal(convert("50", 18));
 
       // Verify auction has accumulated WETH from fees
       const auctionWeth = await weth.balanceOf(result.auction);
@@ -530,10 +500,8 @@ describe("Rigorous Tests", function () {
       await mineRig(rig2.rig, user3);
 
       // Verify independent ownership
-      const slot1 = await rig1Contract.getSlot(0);
-      const slot2 = await rig2Contract.getSlot(0);
-      expect(slot1.miner).to.equal(user2.address);
-      expect(slot2.miner).to.equal(user3.address);
+      expect(await rig1Contract.epochMiner()).to.equal(user2.address);
+      expect(await rig2Contract.epochMiner()).to.equal(user3.address);
 
       // Wait and mine again
       await network.provider.send("evm_increaseTime", [30]);
@@ -565,18 +533,16 @@ describe("Rigorous Tests", function () {
       await network.provider.send("evm_mine");
 
       // State should still be queryable
-      const state = await multicall.getRig(result.rig, 0, user1.address);
+      const state = await multicall.getRig(result.rig, user1.address);
       expect(state.miner).to.equal(user1.address);
       expect(state.epochId).to.equal(1);
 
-      // UPS should still be at initialUps (halving is amount-based, not time-based)
-      // No additional tokens were minted during idle period, so no halving occurred
-      expect(state.nextUps).to.equal(convert("4", 18)); // Default initialUps from launchFreshRig
+      // UPS should be at tail
+      expect(state.nextUps).to.equal(convert("0.01", 18));
 
       // Should still be able to mine
       await mineRig(result.rig, user2);
-      const slotAfter = await rigContract.getSlot(0);
-      expect(slotAfter.miner).to.equal(user2.address);
+      expect(await rigContract.epochMiner()).to.equal(user2.address);
     });
 
     it("Fee accumulation and distribution across many mines", async function () {
@@ -598,8 +564,7 @@ describe("Rigorous Tests", function () {
 
       // Protocol should have received 1% of all payments
       expect(totalProtocolFees).to.be.gt(0);
-      const slotFinal = await rigContract.getSlot(0);
-      expect(slotFinal.epochId).to.equal(10);
+      expect(await rigContract.epochId()).to.equal(10);
     });
   });
 
@@ -648,11 +613,10 @@ describe("Rigorous Tests", function () {
       }
     });
 
-    it("Auction tracks correct USDC accumulated", async function () {
+    it("Auction tracks correct WETH accumulated", async function () {
       const state = await multicall.getAuction(testRig, user1.address);
 
-      // Check that some USDC has been accumulated from rig mining fees
-      expect(state.quoteAccumulated).to.be.gt(0);
+      expect(state.wethAccumulated).to.equal(convert("2", 18));
     });
 
     it("Cannot buy with slippage exceeding maxPaymentTokenAmount", async function () {

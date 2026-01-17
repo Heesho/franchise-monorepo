@@ -17,7 +17,7 @@ contract Unit is ERC20, ERC20Permit, ERC20Votes {
     address public rig;
 
     error Unit__NotRig();
-    error Unit__ZeroRig();
+    error Unit__InvalidRig();
 
     event Unit__Minted(address account, uint256 amount);
     event Unit__Burned(address account, uint256 amount);
@@ -41,7 +41,7 @@ contract Unit is ERC20, ERC20Permit, ERC20Votes {
      */
     function setRig(address _rig) external {
         if (msg.sender != rig) revert Unit__NotRig();
-        if (_rig == address(0)) revert Unit__ZeroRig();
+        if (_rig == address(0)) revert Unit__InvalidRig();
         rig = _rig;
         emit Unit__RigSet(_rig);
     }

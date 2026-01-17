@@ -3,453 +3,268 @@ pragma solidity 0.8.19;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IEntropyV2} from "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
-import {IEntropyConsumer} from "@pythnetwork/entropy-sdk-solidity/IEntropyConsumer.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {IUnit} from "./interfaces/IUnit.sol";
+import {ICore} from "./interfaces/ICore.sol";
 
 /**
  * @title Rig
  * @author heesho
- * @notice A mining rig contract that uses Dutch auctions for slot acquisition.
- *         Miners compete to control slots, paying fees (in USDC) that are distributed to
- *         protocol, treasury, team, and previous miners. Unit tokens are minted
- *         based on time held and multiplier bonuses from optional Pyth Entropy randomness.
+ * @notice A mining rig contract that implements a Dutch auction mechanism for mining Unit tokens.
+ *         Users compete to become the current rig owner by paying a decaying price. The previous
+ *         rig owner receives minted Unit tokens proportional to their holding time, plus a share
+ *         of the payment from the next miner.
+ * @dev Implements a halving schedule for the emission rate (UPS - units per second).
  */
-contract Rig is IEntropyConsumer, ReentrancyGuard, Ownable {
+contract Rig is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /*----------  CONSTANTS  --------------------------------------------*/
 
-    // Fee distribution (basis points)
-    uint256 public constant TOTAL_FEE = 2_000;      // 20% total fees
-    uint256 public constant TREASURY_FEE = 1_500;   // 15% to treasury
-    uint256 public constant TEAM_FEE = 400;         // 4% to team
-    uint256 public constant PROTOCOL_FEE = 100;     // 1% to protocol
-    uint256 public constant DIVISOR = 10_000;
-    uint256 public constant PRECISION = 1e18;
+    uint256 public constant PREVIOUS_MINER_FEE = 8_000; // 80% to previous miner
+    uint256 public constant TEAM_FEE = 400; // 4% to team
+    uint256 public constant PROTOCOL_FEE = 100; // 1% to protocol
+    uint256 public constant DIVISOR = 10_000; // fee divisor (basis points)
+    uint256 public constant PRECISION = 1e18; // precision for multiplier calcs
 
-    // Epoch period bounds
+    // Launch parameter bounds
     uint256 public constant MIN_EPOCH_PERIOD = 10 minutes;
     uint256 public constant MAX_EPOCH_PERIOD = 365 days;
-
-    // Price multiplier bounds (for Dutch auction reset)
-    uint256 public constant MIN_PRICE_MULTIPLIER = 1.1e18;  // 110% minimum
-    uint256 public constant MAX_PRICE_MULTIPLIER = 3e18;    // 300% maximum
-
-    // Init price bounds
-    uint256 public constant ABS_MIN_INIT_PRICE = 1e6;       // Minimum sane value (1 USDC with 6 decimals)
-    uint256 public constant ABS_MAX_INIT_PRICE = type(uint192).max;
-
-    // UPS bounds
-    uint256 public constant MAX_INITIAL_UPS = 1e24;         // Prevent overflow in mined amount calc
-
-    // Halving bounds
-    uint256 public constant MIN_HALVING_AMOUNT = 1000 ether; // Prevent degenerate tokenomics
-
-    // UPS multiplier bounds
-    uint256 public constant DEFAULT_UPS_MULTIPLIER = 1e18;
-    uint256 public constant MIN_UPS_MULTIPLIER = 1e18;      // 1x
-    uint256 public constant MAX_UPS_MULTIPLIER = 10e18;     // 10x
-    uint256 public constant MIN_UPS_MULTIPLIER_DURATION = 1 hours;
-    uint256 public constant MAX_UPS_MULTIPLIER_DURATION = 7 days;
-
-    // Capacity bounds
-    uint256 public constant MAX_CAPACITY = 1_000_000;
+    uint256 public constant MIN_PRICE_MULTIPLIER = 1.1e18; // Should at least be 110% of settlement price
+    uint256 public constant MAX_PRICE_MULTIPLIER = 3e18; // Should not exceed 300% of settlement price
+    uint256 public constant ABS_MIN_INIT_PRICE = 1e6; // Minimum sane value for init price
+    uint256 public constant ABS_MAX_INIT_PRICE = type(uint192).max; // chosen so that epochInitPrice * priceMultiplier does not exceed uint256
+    uint256 public constant MAX_INITIAL_UPS = 1e24; // 1 million tokens/second max to prevent overflow in minedAmount calculation
+    uint256 public constant MIN_HALVING_PERIOD = 1 days; // Minimum halving period to prevent degenerate tokenomics
 
     /*----------  IMMUTABLES  -------------------------------------------*/
 
-    address public immutable unit;      // Unit token to be minted
-    address public immutable quote;     // Payment token (e.g., USDC)
-    address public immutable entropy;   // Pyth Entropy contract
-    address public immutable protocol;  // Protocol fee recipient
-    uint256 public immutable startTime; // Contract deployment timestamp
+    uint256 public immutable initialUps; // starting units per second
+    uint256 public immutable tailUps; // minimum units per second after halvings
+    uint256 public immutable halvingPeriod; // time between emission halvings
+    uint256 public immutable epochPeriod; // duration of each Dutch auction
+    uint256 public immutable priceMultiplier; // multiplier for next epoch's starting price
+    uint256 public immutable minInitPrice; // minimum starting price per epoch
+    uint256 public immutable startTime; // contract deployment timestamp
 
-    uint256 public immutable epochPeriod;       // Duration of each Dutch auction
-    uint256 public immutable priceMultiplier;   // Multiplier for next epoch's starting price
-    uint256 public immutable minInitPrice;      // Minimum starting price per epoch
-    uint256 public immutable initialUps;        // Starting units per second
-    uint256 public immutable halvingAmount;     // Token amount threshold for halving
-    uint256 public immutable tailUps;           // Minimum units per second after halvings
+    address public immutable unit; // Unit token address
+    address public immutable quote; // payment token (e.g., WETH)
+    address public immutable core; // Core contract address
 
     /*----------  STATE  ------------------------------------------------*/
 
-    address public treasury;
-    address public team;
-    uint256 public capacity = 1;
-    uint256 public totalMinted;
-    bool public randomnessEnabled;
-    uint256[] public upsMultipliers;
-    uint256 public upsMultiplierDuration = 24 hours;
-    string public uri;  // Global rig metadata URI
+    uint256 public epochId; // current epoch id
+    uint256 public epochInitPrice; // current epoch starting price
+    uint256 public epochStartTime; // current epoch start timestamp
+    uint256 public epochUps; // current epoch units per second
 
-    mapping(uint256 => Slot) public indexToSlot;
-    mapping(uint64 => uint256) public sequenceToIndex;
-    mapping(uint64 => uint256) public sequenceToEpoch;
-    mapping(address => uint256) public accountToClaimable;
+    address public epochMiner; // current epoch miner
+    address public treasury; // treasury address
+    address public team; // team address
 
-    /*----------  STRUCTS  ----------------------------------------------*/
-
-    struct Config {
-        uint256 epochPeriod;
-        uint256 priceMultiplier;
-        uint256 minInitPrice;
-        uint256 initialUps;
-        uint256 halvingAmount;
-        uint256 tailUps;
-    }
-
-    struct Slot {
-        uint256 epochId;
-        uint256 initPrice;
-        uint256 startTime;
-        uint256 ups;
-        uint256 upsMultiplier;
-        uint256 lastUpsMultiplierTime;
-        address miner;
-        string uri;
-    }
+    string public epochUri; // current epoch miner uri
+    string public uri; // rig uri
 
     /*----------  ERRORS  -----------------------------------------------*/
 
-    error Rig__ZeroAddress();
-    error Rig__ZeroMiner();
-    error Rig__IndexOutOfBounds();
+    error Rig__InvalidMiner();
+    error Rig__Expired();
     error Rig__EpochIdMismatch();
     error Rig__MaxPriceExceeded();
-    error Rig__DeadlinePassed();
-    error Rig__InsufficientFee();
-    error Rig__NoEntropyRequired();
-    error Rig__ZeroTreasury();
-    error Rig__CapacityBelowCurrent();
-    error Rig__CapacityExceedsMax();
-    error Rig__UpsMultiplierOutOfRange();
-    error Rig__EmptyArray();
-    error Rig__UpsMultiplierDurationOutOfRange();
+    error Rig__InvalidUnit();
+    error Rig__InvalidQuote();
+    error Rig__InvalidTreasury();
+    error Rig__InvalidTeam();
+    error Rig__InvalidCore();
+    error Rig__MinInitPriceBelowAbsoluteMin();
+    error Rig__MinInitPriceAboveAbsoluteMax();
     error Rig__EpochPeriodOutOfRange();
     error Rig__PriceMultiplierOutOfRange();
-    error Rig__MinInitPriceOutOfRange();
-    error Rig__ZeroInitialUps();
+    error Rig__InvalidInitialUps();
     error Rig__InitialUpsExceedsMax();
-    error Rig__TailUpsOutOfRange();
-    error Rig__ZeroHalvingAmount();
-    error Rig__HalvingAmountBelowMin();
-    error Rig__NothingToClaim();
+    error Rig__InvalidTailUps();
+    error Rig__InvalidHalvingPeriod();
+    error Rig__HalvingPeriodBelowMin();
 
     /*----------  EVENTS  -----------------------------------------------*/
 
-    event Rig__Mine(
-        address sender,
-        address indexed miner,
-        uint256 indexed index,
-        uint256 indexed epochId,
-        uint256 price,
-        string uri
-    );
-    event Rig__UpsMultiplierSet(uint256 indexed index, uint256 indexed epochId, uint256 upsMultiplier);
-    event Rig__EntropyRequested(uint256 indexed index, uint256 indexed epochId, uint64 indexed sequenceNumber);
-    event Rig__ProtocolFee(address indexed protocol, uint256 indexed index, uint256 indexed epochId, uint256 amount);
-    event Rig__TreasuryFee(address indexed treasury, uint256 indexed index, uint256 indexed epochId, uint256 amount);
-    event Rig__TeamFee(address indexed team, uint256 indexed index, uint256 indexed epochId, uint256 amount);
-    event Rig__MinerFee(address indexed miner, uint256 indexed index, uint256 indexed epochId, uint256 amount);
-    event Rig__Mint(address indexed miner, uint256 indexed index, uint256 indexed epochId, uint256 amount);
+    event Rig__Mined(address indexed sender, address indexed miner, uint256 price, string uri);
+    event Rig__Minted(address indexed miner, uint256 amount);
+    event Rig__PreviousMinerFee(address indexed miner, uint256 amount);
+    event Rig__TreasuryFee(address indexed treasury, uint256 amount);
+    event Rig__TeamFee(address indexed team, uint256 amount);
+    event Rig__ProtocolFee(address indexed protocol, uint256 amount);
     event Rig__TreasurySet(address indexed treasury);
     event Rig__TeamSet(address indexed team);
-    event Rig__CapacitySet(uint256 capacity);
-    event Rig__UpsMultipliersSet(uint256[] upsMultipliers);
-    event Rig__RandomnessEnabledSet(bool enabled);
-    event Rig__UpsMultiplierDurationSet(uint256 duration);
     event Rig__UriSet(string uri);
-    event Rig__Claimed(address indexed account, uint256 amount);
 
     /*----------  CONSTRUCTOR  ------------------------------------------*/
 
+    /**
+     * @notice Deploys a new Rig contract.
+     * @param _unit Unit token address (deployed separately by Core)
+     * @param _quote Payment token address (e.g., WETH)
+     * @param _treasury Initial treasury address for fee collection
+     * @param _team Team address for fee collection
+     * @param _core Core contract address for protocol fee lookups
+     * @param _uri Metadata URI for the rig
+     * @param _initialUps Starting units per second emission rate
+     * @param _tailUps Minimum units per second after halvings
+     * @param _halvingPeriod Time between emission halvings
+     * @param _epochPeriod Duration of each Dutch auction epoch
+     * @param _priceMultiplier Multiplier for next epoch's starting price
+     * @param _minInitPrice Minimum starting price per epoch
+     */
     constructor(
         address _unit,
         address _quote,
-        address _entropy,
-        address _protocol,
         address _treasury,
-        Config memory _config
+        address _team,
+        address _core,
+        string memory _uri,
+        uint256 _initialUps,
+        uint256 _tailUps,
+        uint256 _halvingPeriod,
+        uint256 _epochPeriod,
+        uint256 _priceMultiplier,
+        uint256 _minInitPrice
     ) {
-        // Validate addresses (protocol can be zero - fee redirects to treasury)
-        if (_unit == address(0)) revert Rig__ZeroAddress();
-        if (_quote == address(0)) revert Rig__ZeroAddress();
-        if (_entropy == address(0)) revert Rig__ZeroAddress();
-        if (_treasury == address(0)) revert Rig__ZeroAddress();
-
-        // Validate epoch period
-        if (_config.epochPeriod < MIN_EPOCH_PERIOD || _config.epochPeriod > MAX_EPOCH_PERIOD) {
-            revert Rig__EpochPeriodOutOfRange();
-        }
-
-        // Validate price multiplier
-        if (_config.priceMultiplier < MIN_PRICE_MULTIPLIER || _config.priceMultiplier > MAX_PRICE_MULTIPLIER) {
+        if (_unit == address(0)) revert Rig__InvalidUnit();
+        if (_quote == address(0)) revert Rig__InvalidQuote();
+        if (_treasury == address(0)) revert Rig__InvalidTreasury();
+        if (_team == address(0)) revert Rig__InvalidTeam();
+        if (_core == address(0)) revert Rig__InvalidCore();
+        if (_initialUps == 0) revert Rig__InvalidInitialUps();
+        if (_initialUps > MAX_INITIAL_UPS) revert Rig__InitialUpsExceedsMax();
+        if (_tailUps == 0 || _tailUps > _initialUps) revert Rig__InvalidTailUps();
+        if (_halvingPeriod == 0) revert Rig__InvalidHalvingPeriod();
+        if (_halvingPeriod < MIN_HALVING_PERIOD) revert Rig__HalvingPeriodBelowMin();
+        if (_minInitPrice < ABS_MIN_INIT_PRICE) revert Rig__MinInitPriceBelowAbsoluteMin();
+        if (_minInitPrice > ABS_MAX_INIT_PRICE) revert Rig__MinInitPriceAboveAbsoluteMax();
+        if (_epochPeriod < MIN_EPOCH_PERIOD || _epochPeriod > MAX_EPOCH_PERIOD) revert Rig__EpochPeriodOutOfRange();
+        if (_priceMultiplier < MIN_PRICE_MULTIPLIER || _priceMultiplier > MAX_PRICE_MULTIPLIER) {
             revert Rig__PriceMultiplierOutOfRange();
         }
 
-        // Validate min init price
-        if (_config.minInitPrice < ABS_MIN_INIT_PRICE || _config.minInitPrice > ABS_MAX_INIT_PRICE) {
-            revert Rig__MinInitPriceOutOfRange();
-        }
-
-        // Validate initial UPS
-        if (_config.initialUps == 0) revert Rig__ZeroInitialUps();
-        if (_config.initialUps > MAX_INITIAL_UPS) revert Rig__InitialUpsExceedsMax();
-
-        // Validate tail UPS
-        if (_config.tailUps == 0 || _config.tailUps > _config.initialUps) revert Rig__TailUpsOutOfRange();
-
-        // Validate halving amount
-        if (_config.halvingAmount == 0) revert Rig__ZeroHalvingAmount();
-        if (_config.halvingAmount < MIN_HALVING_AMOUNT) revert Rig__HalvingAmountBelowMin();
-
-        // Set immutables
         unit = _unit;
         quote = _quote;
-        entropy = _entropy;
-        protocol = _protocol;
+        treasury = _treasury;
+        team = _team;
+        core = _core;
+        uri = _uri;
         startTime = block.timestamp;
 
-        epochPeriod = _config.epochPeriod;
-        priceMultiplier = _config.priceMultiplier;
-        minInitPrice = _config.minInitPrice;
-        initialUps = _config.initialUps;
-        halvingAmount = _config.halvingAmount;
-        tailUps = _config.tailUps;
+        initialUps = _initialUps;
+        tailUps = _tailUps;
+        halvingPeriod = _halvingPeriod;
+        epochPeriod = _epochPeriod;
+        priceMultiplier = _priceMultiplier;
+        minInitPrice = _minInitPrice;
 
-        // Set initial state
-        treasury = _treasury;
+        epochInitPrice = _minInitPrice;
+        epochStartTime = block.timestamp;
+        epochMiner = _team;
+        epochUps = _initialUps;
     }
 
     /*----------  EXTERNAL FUNCTIONS  -----------------------------------*/
 
     /**
-     * @notice Mine a slot by paying the current Dutch auction price.
-     * @param miner Address to set as the slot miner (receives future minted tokens)
-     * @param index Slot index to mine
-     * @param epochId Expected epoch ID (reverts if mismatched for frontrun protection)
+     * @notice Mine the rig by paying the current Dutch auction price.
+     * @dev Transfers payment to fee recipients, mints Unit tokens to previous holder,
+     *      and sets the caller as the new miner.
+     * @param miner Address to set as new miner (receives future minted tokens)
+     * @param _epochId Expected epoch ID (reverts if mismatched for frontrun protection)
      * @param deadline Transaction deadline timestamp
      * @param maxPrice Maximum price willing to pay (slippage protection)
-     * @param _uri Metadata URI for this mining action
+     * @param _epochUri Metadata URI for this mining action
      * @return price Actual price paid
      */
-    function mine(
-        address miner,
-        uint256 index,
-        uint256 epochId,
-        uint256 deadline,
-        uint256 maxPrice,
-        string calldata _uri
-    ) external payable nonReentrant returns (uint256 price) {
-        if (miner == address(0)) revert Rig__ZeroMiner();
-        if (block.timestamp > deadline) revert Rig__DeadlinePassed();
-        if (index >= capacity) revert Rig__IndexOutOfBounds();
+    function mine(address miner, uint256 _epochId, uint256 deadline, uint256 maxPrice, string calldata _epochUri)
+        external
+        nonReentrant
+        returns (uint256 price)
+    {
+        if (miner == address(0)) revert Rig__InvalidMiner();
+        if (block.timestamp > deadline) revert Rig__Expired();
+        if (_epochId != epochId) revert Rig__EpochIdMismatch();
 
-        Slot memory slotCache = indexToSlot[index];
-
-        if (epochId != slotCache.epochId) revert Rig__EpochIdMismatch();
-
-        price = _getPriceFromCache(slotCache);
+        price = getPrice();
         if (price > maxPrice) revert Rig__MaxPriceExceeded();
 
+        // Distribute payment to fee recipients
         if (price > 0) {
-            // Transfer full price to this contract
+            address protocolFeeAddr = ICore(core).protocolFeeAddress();
+
+            // Calculate fees - team and protocol fees go to treasury if their addresses are zero
+            uint256 previousMinerAmount = price * PREVIOUS_MINER_FEE / DIVISOR;
+            uint256 teamAmount = team != address(0) ? price * TEAM_FEE / DIVISOR : 0;
+            uint256 protocolAmount = protocolFeeAddr != address(0) ? price * PROTOCOL_FEE / DIVISOR : 0;
+            uint256 treasuryAmount = price - previousMinerAmount - teamAmount - protocolAmount;
+
+            // Pull payment once, then distribute
             IERC20(quote).safeTransferFrom(msg.sender, address(this), price);
 
-            // Calculate fees
-            uint256 minerFee = price * (DIVISOR - TOTAL_FEE) / DIVISOR;
-            uint256 protocolFee = protocol != address(0) ? price * PROTOCOL_FEE / DIVISOR : 0;
-            uint256 teamFee = team != address(0) ? price * TEAM_FEE / DIVISOR : 0;
-            uint256 treasuryFee = price - minerFee - protocolFee - teamFee; // remainder collects dust
+            // Previous miner always gets paid
+            IERC20(quote).safeTransfer(epochMiner, previousMinerAmount);
+            emit Rig__PreviousMinerFee(epochMiner, previousMinerAmount);
 
-            // Distribute fees
-            accountToClaimable[slotCache.miner] += minerFee;
-            emit Rig__MinerFee(slotCache.miner, index, epochId, minerFee);
+            // Treasury gets base fee + any unclaimed team/protocol fees
+            IERC20(quote).safeTransfer(treasury, treasuryAmount);
+            emit Rig__TreasuryFee(treasury, treasuryAmount);
 
-            IERC20(quote).safeTransfer(treasury, treasuryFee);
-            emit Rig__TreasuryFee(treasury, index, epochId, treasuryFee);
-
-            if (protocolFee > 0) {
-                IERC20(quote).safeTransfer(protocol, protocolFee);
-                emit Rig__ProtocolFee(protocol, index, epochId, protocolFee);
+            // Team fee only if team address is set
+            if (teamAmount > 0) {
+                IERC20(quote).safeTransfer(team, teamAmount);
+                emit Rig__TeamFee(team, teamAmount);
             }
 
-            if (teamFee > 0) {
-                IERC20(quote).safeTransfer(team, teamFee);
-                emit Rig__TeamFee(team, index, epochId, teamFee);
+            // Protocol fee only if protocol address is set
+            if (protocolAmount > 0) {
+                IERC20(quote).safeTransfer(protocolFeeAddr, protocolAmount);
+                emit Rig__ProtocolFee(protocolFeeAddr, protocolAmount);
             }
         }
 
+        // Calculate next epoch's starting price
         uint256 newInitPrice = price * priceMultiplier / PRECISION;
-
         if (newInitPrice > ABS_MAX_INIT_PRICE) {
             newInitPrice = ABS_MAX_INIT_PRICE;
         } else if (newInitPrice < minInitPrice) {
             newInitPrice = minInitPrice;
         }
 
-        uint256 mineTime = block.timestamp - slotCache.startTime;
-        uint256 minedAmount = mineTime * slotCache.ups * slotCache.upsMultiplier / PRECISION;
+        // Mint tokens to previous rig holder based on holding time
+        uint256 mineTime = block.timestamp - epochStartTime;
+        uint256 minedAmount = mineTime * epochUps;
 
-        if (slotCache.miner != address(0)) {
-            totalMinted += minedAmount;
-            IUnit(unit).mint(slotCache.miner, minedAmount);
-            emit Rig__Mint(slotCache.miner, index, epochId, minedAmount);
-        }
+        IUnit(unit).mint(epochMiner, minedAmount);
+        emit Rig__Minted(epochMiner, minedAmount);
 
+        // Update state for new epoch
         unchecked {
-            slotCache.epochId++;
+            epochId++;
         }
-        slotCache.initPrice = newInitPrice;
-        slotCache.startTime = block.timestamp;
-        slotCache.miner = miner;
-        slotCache.ups = _getUpsFromSupply() / capacity;
-        slotCache.uri = _uri;
+        epochInitPrice = newInitPrice;
+        epochStartTime = block.timestamp;
+        epochMiner = miner;
+        epochUps = _getUpsFromTime(block.timestamp);
+        epochUri = _epochUri;
 
-        bool shouldUpdateUpsMultiplier = block.timestamp - slotCache.lastUpsMultiplierTime > upsMultiplierDuration;
-        if (shouldUpdateUpsMultiplier) {
-            slotCache.upsMultiplier = DEFAULT_UPS_MULTIPLIER;
-            slotCache.lastUpsMultiplierTime = block.timestamp;
-            emit Rig__UpsMultiplierSet(index, slotCache.epochId, DEFAULT_UPS_MULTIPLIER);
-        }
-
-        indexToSlot[index] = slotCache;
-
-        emit Rig__Mine(msg.sender, miner, index, epochId, price, _uri);
-
-        // Only request entropy if randomness is enabled and upsMultiplier needs updating
-        if (randomnessEnabled && shouldUpdateUpsMultiplier) {
-            uint128 fee = IEntropyV2(entropy).getFeeV2();
-            if (msg.value < fee) revert Rig__InsufficientFee();
-            uint64 seq = IEntropyV2(entropy).requestV2{value: fee}();
-            sequenceToIndex[seq] = index;
-            sequenceToEpoch[seq] = slotCache.epochId;
-            emit Rig__EntropyRequested(index, slotCache.epochId, seq);
-            // Excess ETH stays in contract
-        } else if (msg.value > 0) {
-            revert Rig__NoEntropyRequired();
-        }
+        emit Rig__Mined(msg.sender, miner, price, _epochUri);
 
         return price;
     }
 
-    /**
-     * @notice Claim accumulated miner fees for an account.
-     * @dev Uses pull pattern to avoid issues with blacklisted addresses blocking mining.
-     *      Anyone can trigger a claim for any account. Funds go to the account, not caller.
-     * @param account The account to claim for
-     */
-    function claim(address account) external nonReentrant {
-        uint256 amount = accountToClaimable[account];
-        if (amount == 0) revert Rig__NothingToClaim();
-        accountToClaimable[account] = 0;
-        IERC20(quote).safeTransfer(account, amount);
-        emit Rig__Claimed(account, amount);
-    }
-
-    /**
-     * @notice Callback from Pyth Entropy with random number for UPS multiplier.
-     * @dev Called by Entropy contract after randomness is generated.
-     *      Ignores stale callbacks (epoch changed) or empty slots.
-     * @param sequenceNumber Entropy request sequence number
-     * @param randomNumber Random bytes32 from Pyth Entropy
-     */
-    function entropyCallback(uint64 sequenceNumber, address, /*provider*/ bytes32 randomNumber) internal override {
-        uint256 index = sequenceToIndex[sequenceNumber];
-        uint256 epoch = sequenceToEpoch[sequenceNumber];
-
-        delete sequenceToIndex[sequenceNumber];
-        delete sequenceToEpoch[sequenceNumber];
-
-        Slot memory slotCache = indexToSlot[index];
-        if (slotCache.epochId != epoch || slotCache.miner == address(0)) return;
-
-        uint256 upsMultiplier = _drawUpsMultiplier(randomNumber);
-        slotCache.upsMultiplier = upsMultiplier;
-        slotCache.lastUpsMultiplierTime = block.timestamp;
-
-        indexToSlot[index] = slotCache;
-        emit Rig__UpsMultiplierSet(index, epoch, upsMultiplier);
-    }
-
-    /**
-     * @notice Draw a random UPS multiplier from the configured array.
-     * @dev Uses modulo to select index from upsMultipliers array.
-     * @param randomNumber Random bytes32 to use for selection
-     * @return Selected multiplier value (1e18 = 1x, 10e18 = 10x)
-     */
-    function _drawUpsMultiplier(bytes32 randomNumber) internal view returns (uint256) {
-        uint256 length = upsMultipliers.length;
-        if (length == 0) return DEFAULT_UPS_MULTIPLIER;
-        uint256 idx = uint256(randomNumber) % length;
-        return upsMultipliers[idx];
-    }
-
-    /**
-     * @notice Calculate current Dutch auction price from cached slot state.
-     * @dev Price decays linearly from initPrice to 0 over epochPeriod.
-     * @param slotCache Cached slot state to calculate price from
-     * @return Current price (0 if epoch has expired)
-     */
-    function _getPriceFromCache(Slot memory slotCache) internal view returns (uint256) {
-        uint256 timePassed = block.timestamp - slotCache.startTime;
-
-        if (timePassed > epochPeriod) {
-            return 0;
-        }
-
-        return slotCache.initPrice - slotCache.initPrice * timePassed / epochPeriod;
-    }
-
-    /**
-     * @notice Calculate current UPS based on total minted and halving schedule.
-     * @dev Implements a Bitcoin-like halving mechanism where UPS halves at each threshold.
-     *
-     *      Threshold Formula (geometric series):
-     *        threshold[0] = halvingAmount                           (1st halving)
-     *        threshold[1] = halvingAmount + halvingAmount/2         (2nd halving)
-     *        threshold[2] = halvingAmount + halvingAmount/2 + halvingAmount/4  (3rd halving)
-     *        ...
-     *        threshold[n] = halvingAmount * (2 - 1/2^n) ≈ 2 * halvingAmount (limit)
-     *
-     *      Example with halvingAmount = 1000, initialUps = 100:
-     *        totalMinted < 1000:  ups = 100 (0 halvings)
-     *        totalMinted < 1500:  ups = 50  (1 halving)
-     *        totalMinted < 1750:  ups = 25  (2 halvings)
-     *        totalMinted < 1875:  ups = 12  (3 halvings)
-     *        ...continues until ups reaches tailUps floor
-     *
-     *      The loop is bounded at 64 iterations to prevent infinite loops.
-     *      UPS is floored at tailUps to ensure mining never fully stops.
-     *
-     * @return ups Current units per second (before capacity division)
-     */
-    function _getUpsFromSupply() internal view returns (uint256 ups) {
-        uint256 halvings = 0;
-        uint256 threshold = halvingAmount;
-
-        // Count how many halving thresholds have been crossed
-        while (totalMinted >= threshold && halvings < 64) {
-            halvings++;
-            threshold += halvingAmount >> halvings; // Add next halving increment
-        }
-
-        // Apply halvings via bit shift (equivalent to dividing by 2^halvings)
-        ups = initialUps >> halvings;
-        if (ups < tailUps) ups = tailUps;
-        return ups;
-    }
-
-    /*----------  OWNER FUNCTIONS  --------------------------------------*/
+    /*----------  RESTRICTED FUNCTIONS  ---------------------------------*/
 
     /**
      * @notice Update the treasury address for fee collection.
-     * @param _treasury New treasury address (cannot be zero)
+     * @param _treasury New treasury address
      */
     function setTreasury(address _treasury) external onlyOwner {
-        if (_treasury == address(0)) revert Rig__ZeroTreasury();
+        if (_treasury == address(0)) revert Rig__InvalidTreasury();
         treasury = _treasury;
         emit Rig__TreasurySet(_treasury);
     }
@@ -465,59 +280,9 @@ contract Rig is IEntropyConsumer, ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice Increase the number of mining slots.
-     * @dev Can only increase, never decrease.
-     * @param _capacity New capacity (must be greater than current)
-     */
-    function setCapacity(uint256 _capacity) external onlyOwner {
-        if (_capacity <= capacity) revert Rig__CapacityBelowCurrent();
-        if (_capacity > MAX_CAPACITY) revert Rig__CapacityExceedsMax();
-        capacity = _capacity;
-        emit Rig__CapacitySet(_capacity);
-    }
-
-    /**
-     * @notice Set the UPS multiplier options for random selection.
-     * @param _upsMultipliers Array of multiplier values (each must be between 1x and 10x)
-     */
-    function setUpsMultipliers(uint256[] calldata _upsMultipliers) external onlyOwner {
-        uint256 length = _upsMultipliers.length;
-        if (length == 0) revert Rig__EmptyArray();
-
-        for (uint256 i = 0; i < length;) {
-            if (_upsMultipliers[i] < MIN_UPS_MULTIPLIER) revert Rig__UpsMultiplierOutOfRange();
-            if (_upsMultipliers[i] > MAX_UPS_MULTIPLIER) revert Rig__UpsMultiplierOutOfRange();
-            unchecked { ++i; }
-        }
-
-        upsMultipliers = _upsMultipliers;
-
-        emit Rig__UpsMultipliersSet(_upsMultipliers);
-    }
-
-    /**
-     * @notice Enable or disable randomness for UPS multipliers.
-     * @param _enabled True to enable entropy-based random multipliers
-     */
-    function setRandomnessEnabled(bool _enabled) external onlyOwner {
-        randomnessEnabled = _enabled;
-        emit Rig__RandomnessEnabledSet(_enabled);
-    }
-
-    /**
-     * @notice Set how long a UPS multiplier lasts before resetting.
-     * @param _duration Duration in seconds (must be between 1 hour and 7 days)
-     */
-    function setUpsMultiplierDuration(uint256 _duration) external onlyOwner {
-        if (_duration < MIN_UPS_MULTIPLIER_DURATION) revert Rig__UpsMultiplierDurationOutOfRange();
-        if (_duration > MAX_UPS_MULTIPLIER_DURATION) revert Rig__UpsMultiplierDurationOutOfRange();
-        upsMultiplierDuration = _duration;
-        emit Rig__UpsMultiplierDurationSet(_duration);
-    }
-
-    /**
-     * @notice Update the global metadata URI for the rig.
-     * @param _uri New metadata URI (e.g., for logo, branding)
+     * @notice Update the metadata URI.
+     * @dev Used to set metadata like the unit logo image.
+     * @param _uri New metadata URI
      */
     function setUri(string calldata _uri) external onlyOwner {
         uri = _uri;
@@ -526,35 +291,31 @@ contract Rig is IEntropyConsumer, ReentrancyGuard, Ownable {
 
     /*----------  VIEW FUNCTIONS  ---------------------------------------*/
 
-    function getEntropy() internal view override returns (address) {
-        return entropy;
+    /**
+     * @notice Get the current Dutch auction price.
+     * @return Current price (linearly decays from epochInitPrice to 0 over epochPeriod)
+     */
+    function getPrice() public view returns (uint256) {
+        uint256 timePassed = block.timestamp - epochStartTime;
+        if (timePassed > epochPeriod) return 0;
+        return epochInitPrice - epochInitPrice * timePassed / epochPeriod;
     }
 
-    function getEntropyFee() external view returns (uint256) {
-        return IEntropyV2(entropy).getFeeV2();
-    }
-
-    function getPrice(uint256 index) external view returns (uint256) {
-        return _getPriceFromCache(indexToSlot[index]);
-    }
-
+    /**
+     * @notice Get the current units-per-second emission rate.
+     * @return Current UPS after applying halvings
+     */
     function getUps() external view returns (uint256) {
-        return _getUpsFromSupply();
+        return _getUpsFromTime(block.timestamp);
     }
 
-    function getSlot(uint256 index) external view returns (Slot memory) {
-        return indexToSlot[index];
-    }
-
-    function getUpsMultipliers() external view returns (uint256[] memory) {
-        return upsMultipliers;
-    }
-
-    function getUpsMultipliersLength() external view returns (uint256) {
-        return upsMultipliers.length;
-    }
-
-    function isRandomnessEnabled() external view returns (bool) {
-        return randomnessEnabled;
+    /**
+     * @dev Calculate UPS at a given timestamp based on halving schedule.
+     */
+    function _getUpsFromTime(uint256 time) internal view returns (uint256 ups) {
+        uint256 halvings = time <= startTime ? 0 : (time - startTime) / halvingPeriod;
+        ups = initialUps >> halvings;
+        if (ups < tailUps) ups = tailUps;
+        return ups;
     }
 }
