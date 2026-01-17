@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+
+# Hardhat
+packages/hardhat/cache/
+packages/hardhat/artifacts/
+
+# Subgraph
+packages/subgraph/build/
+packages/subgraph/generated/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code (personal settings)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Playwright MCP screenshots
+.playwright-mcp/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

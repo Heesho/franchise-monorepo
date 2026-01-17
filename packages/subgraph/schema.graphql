@@ -1,0 +1,105 @@
+# Global launchpad stats
+type Launchpad @entity(immutable: false) {
+  id: ID!
+  totalRigs: BigInt!
+  totalRevenue: BigDecimal! # Total treasury revenue across all rigs
+  totalMinted: BigDecimal!
+  protocolRevenue: BigDecimal! # Platform revenue (1% protocol fees)
+  rigs: [Rig!]! @derivedFrom(field: "launchpad")
+}
+
+# A mining rig instance deployed via the launchpad
+type Rig @entity(immutable: false) {
+  id: ID!
+  launchpad: Launchpad!
+  launcher: Account!
+  unit: Bytes!
+  quoteToken: Bytes! # Payment token (e.g., USDC)
+  auction: Bytes!
+  lpToken: Bytes!
+  tokenName: String!
+  tokenSymbol: String!
+  uri: String!
+  # Launch parameters
+  initialUps: BigInt!
+  tailUps: BigInt!
+  halvingAmount: BigInt! # Token supply threshold for halving
+  rigEpochPeriod: BigInt!
+  rigPriceMultiplier: BigDecimal!
+  rigMinInitPrice: BigDecimal!
+  # Runtime state
+  capacity: BigInt! # Number of slots
+  revenue: BigDecimal! # Treasury revenue (15% fees to auction)
+  teamRevenue: BigDecimal! # Team revenue (4% fees)
+  minted: BigDecimal!
+  lastMined: BigInt!
+  createdAt: BigInt!
+  createdAtBlock: BigInt!
+  slots: [Slot!]! @derivedFrom(field: "rig")
+  rigAccounts: [RigAccount!]! @derivedFrom(field: "rig")
+}
+
+# A mining slot within a rig (each rig can have multiple slots)
+type Slot @entity(immutable: false) {
+  id: ID! # {rigAddress}-{slotIndex}
+  rig: Rig!
+  index: BigInt!
+  epochId: BigInt!
+  currentMiner: Account
+  uri: String!
+  # Runtime state per slot
+  minted: BigDecimal!
+  lastMined: BigInt!
+  epochs: [Epoch!]! @derivedFrom(field: "slot")
+}
+
+# User account (global identity)
+type Account @entity(immutable: false) {
+  id: ID!
+  rigsLaunched: [Rig!]! @derivedFrom(field: "launcher")
+  rigAccounts: [RigAccount!]! @derivedFrom(field: "account")
+  currentSlots: [Slot!]! @derivedFrom(field: "currentMiner")
+}
+
+# User participation on a specific rig
+type RigAccount @entity(immutable: false) {
+  id: ID! # {rigAddress}-{accountAddress}
+  rig: Rig!
+  account: Account!
+  spent: BigDecimal! # Quote tokens spent mining on this rig
+  earned: BigDecimal! # Quote tokens earned from miner fees
+  mined: BigDecimal! # Unit tokens minted on this rig
+  epochs: [Epoch!]! @derivedFrom(field: "rigAccount")
+}
+
+# A single mining epoch on a slot
+type Epoch @entity(immutable: false) {
+  id: ID! # {rigAddress}-{slotIndex}-{epochId}
+  rig: Rig!
+  slot: Slot!
+  rigAccount: RigAccount!
+  index: BigInt! # Slot index
+  epochId: BigInt!
+  uri: String!
+  startTime: BigInt!
+  mined: BigDecimal! # Unit tokens minted this epoch
+  spent: BigDecimal! # Quote tokens spent this epoch
+  earned: BigDecimal! # Quote tokens earned this epoch (miner fee)
+}
+
+# Mine event for activity feed (tracks each mine action with aggregated data)
+type Mine @entity(immutable: false) {
+  id: ID! # {rigAddress}-{slotIndex}-{epochId}
+  rig: Rig!
+  miner: Account! # New miner who took the slot
+  prevMiner: Account # Previous miner who got displaced (if any)
+  slotIndex: BigInt!
+  epochId: BigInt!
+  uri: String!
+  price: BigDecimal! # What the new miner paid (spent)
+  mined: BigDecimal! # Tokens minted for previous miner
+  earned: BigDecimal! # Fee earned by previous miner
+  upsMultiplier: BigInt # UPS multiplier at time of mine (if set)
+  timestamp: BigInt!
+  blockNumber: BigInt!
+}

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [],
+    "deny": []
+  },
+  "enabledPlugins": {
+    "context7": true,
+    "playwright": true,
+    "superpowers": true,
+    "frontend-design": true
+  }
+}

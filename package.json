@@ -1,0 +1,12 @@
+{
+  "name": "mineport",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "hardhat": "npm --workspace=packages/hardhat",
+    "subgraph": "npm --workspace=packages/subgraph"
+  }
+}

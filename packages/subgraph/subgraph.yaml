@@ -1,0 +1,71 @@
+specVersion: 1.3.0
+indexerHints:
+  prune: auto
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: Core
+    network: base
+    source:
+      address: "0xF837F616Fe1fd33Cd8290759D3ae1FB09230d73b"
+      abi: Core
+      startBlock: 40863798
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Launchpad
+        - Rig
+        - Account
+      abis:
+        - name: Core
+          file: ./abis/Core.json
+        - name: Rig
+          file: ./abis/Rig.json
+      eventHandlers:
+        - event: Core__Launched(address,address,address,address,address,address,string,string,string,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)
+          handler: handleCoreLaunched
+      file: ./src/core.ts
+templates:
+  - kind: ethereum
+    name: Rig
+    network: base
+    source:
+      abi: Rig
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Rig
+        - Slot
+        - Account
+        - Epoch
+        - Mine
+      abis:
+        - name: Rig
+          file: ./abis/Rig.json
+      eventHandlers:
+        - event: Rig__Mine(address,indexed address,indexed uint256,indexed uint256,uint256,string)
+          handler: handleRigMine
+        - event: Rig__MinerFee(indexed address,indexed uint256,indexed uint256,uint256)
+          handler: handleRigMinerFee
+        - event: Rig__Mint(indexed address,indexed uint256,indexed uint256,uint256)
+          handler: handleRigMint
+        - event: Rig__TreasuryFee(indexed address,indexed uint256,indexed uint256,uint256)
+          handler: handleRigTreasuryFee
+        - event: Rig__TeamFee(indexed address,indexed uint256,indexed uint256,uint256)
+          handler: handleRigTeamFee
+        - event: Rig__ProtocolFee(indexed address,indexed uint256,indexed uint256,uint256)
+          handler: handleRigProtocolFee
+        - event: Rig__TreasurySet(indexed address)
+          handler: handleRigTreasurySet
+        - event: Rig__TeamSet(indexed address)
+          handler: handleRigTeamSet
+        - event: Rig__CapacitySet(uint256)
+          handler: handleRigCapacitySet
+        - event: Rig__UriSet(string)
+          handler: handleRigUriSet
+      file: ./src/rig.ts
