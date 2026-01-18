@@ -1292,34 +1292,6 @@ export default function RigDetailPage() {
             isLoading={isLoadingLeaderboard}
           />
 
-          {/* Friend Activity Banner */}
-          {friendActivityMessage && friendActivity?.friends && friendActivity.friends.length > 0 && (
-            <div className="mb-6">
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-secondary border border-zinc-700">
-                <div className="flex -space-x-2">
-                  {friendActivity.friends.slice(0, 3).map((friend) => (
-                    <button
-                      key={friend.fid}
-                      onClick={() => viewProfile(friend.fid)}
-                      className="cursor-pointer"
-                    >
-                      <Avatar className="h-6 w-6 border-2 border-black">
-                        <AvatarImage
-                          src={friend.pfpUrl ?? `https://api.dicebear.com/7.x/shapes/svg?seed=${friend.fid}`}
-                          alt={friend.displayName || friend.username || "Friend"}
-                        />
-                        <AvatarFallback className="bg-secondary text-white text-[8px]">
-                          {(friend.displayName || friend.username || "?").slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                    </button>
-                  ))}
-                </div>
-                <span className="text-sm text-muted-foreground">{friendActivityMessage}</span>
-              </div>
-            </div>
-          )}
-
           {/* Recent Mines */}
           <div className="mt-6 mb-6">
             <h2 className="font-semibold text-[18px] mb-3">Recent Mines</h2>
@@ -1455,11 +1427,11 @@ export default function RigDetailPage() {
             {/* Content */}
             <div className="flex-1 min-h-0 flex flex-col px-4">
               {/* Title */}
-              <div className="mt-4 mb-6">
-                <h1 className="text-2xl font-semibold tracking-tight">
+              <div className="mt-2 mb-4">
+                <h1 className="text-xl font-semibold tracking-tight">
                   Mine {tokenSymbol}
                 </h1>
-                <p className="text-[13px] text-zinc-500 mt-1">
+                <p className="text-[12px] text-zinc-500 mt-0.5">
                   Ξ{ethBalance.toFixed(4)} available
                 </p>
               </div>
@@ -1468,97 +1440,97 @@ export default function RigDetailPage() {
               {hasMiner && (
                 <div className="flex-1 flex flex-col">
                   {/* Miner Header */}
-                  <div className="py-6" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <div className="flex items-center gap-4">
-                      <Avatar className="h-16 w-16 flex-shrink-0">
+                  <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-12 w-12 flex-shrink-0">
                         <AvatarImage src={minerAvatarUrl} />
-                        <AvatarFallback className="bg-zinc-700 text-lg">
+                        <AvatarFallback className="bg-zinc-700 text-base">
                           {minerAddress.slice(2, 4).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
-                        <div className="text-lg font-semibold truncate">{minerDisplayName}</div>
-                        <div className="text-sm text-zinc-500">
+                        <div className="text-base font-semibold truncate">{minerDisplayName}</div>
+                        <div className="text-xs text-zinc-500">
                           {minerAddress.slice(0, 6)}...{minerAddress.slice(-4)}
                         </div>
                       </div>
                     </div>
                     {rigState?.epochUri && (
-                      <div className="mt-3 text-sm text-zinc-400 italic truncate">
+                      <div className="mt-2 text-sm text-zinc-400 italic truncate">
                         "{rigState.epochUri}"
                       </div>
                     )}
                   </div>
 
                   {/* Rate + Price + Time */}
-                  <div className="flex py-5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="flex py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     <div className="flex-1">
-                      <div className="text-sm text-muted-foreground mb-1">Rate</div>
-                      <div className="text-2xl font-semibold tabular-nums">
+                      <div className="text-xs text-muted-foreground mb-0.5">Rate</div>
+                      <div className="text-lg font-semibold tabular-nums">
                         {Number(formatUnits(rigState?.nextUps ?? 0n, TOKEN_DECIMALS)).toFixed(2)}/s
                       </div>
-                      <div className="text-sm text-muted-foreground mt-0.5">
+                      <div className="text-xs text-muted-foreground">
                         ${rateUsd.toFixed(4)}/s
                       </div>
                     </div>
                     <div className="flex-1 text-center">
-                      <div className="text-sm text-muted-foreground mb-1">Price</div>
-                      <div className="text-2xl font-semibold tabular-nums">
+                      <div className="text-xs text-muted-foreground mb-0.5">Price</div>
+                      <div className="text-lg font-semibold tabular-nums">
                         Ξ{priceEth.toFixed(4)}
                       </div>
-                      <div className="text-sm text-muted-foreground mt-0.5">
+                      <div className="text-xs text-muted-foreground">
                         {formatUsd(priceUsd)}
                       </div>
                     </div>
                     <div className="flex-1 text-right">
-                      <div className="text-sm text-muted-foreground mb-1">Time</div>
-                      <div className="text-2xl font-semibold tabular-nums">
+                      <div className="text-xs text-muted-foreground mb-0.5">Time</div>
+                      <div className="text-lg font-semibold tabular-nums">
                         {formatTime(glazeElapsedSeconds)}
                       </div>
                     </div>
                   </div>
 
                   {/* Mined + PnL stacked, line, then Total - like hand addition */}
-                  <div className="py-5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     {/* Mined row */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="text-sm text-muted-foreground">Mined</div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-xs text-muted-foreground">Mined</div>
                       <div className="text-right">
-                        <div className="text-xl font-semibold tabular-nums flex items-center justify-end gap-1.5">
+                        <div className="text-base font-semibold tabular-nums flex items-center justify-end gap-1.5">
                           +
                           {tokenLogoUrl ? (
-                            <img src={tokenLogoUrl} alt={tokenSymbol} className="w-5 h-5 rounded-full" />
+                            <img src={tokenLogoUrl} alt={tokenSymbol} className="w-4 h-4 rounded-full" />
                           ) : (
-                            <span className="w-5 h-5 rounded-full bg-zinc-700 flex items-center justify-center text-[10px]">
+                            <span className="w-4 h-4 rounded-full bg-zinc-700 flex items-center justify-center text-[9px]">
                               {tokenSymbol.slice(0, 2)}
                             </span>
                           )}
                           {Number(formatUnits(glazedAmount, TOKEN_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">+{formatUsd(glazedUsd)}</div>
+                        <div className="text-[10px] text-muted-foreground">+{formatUsd(glazedUsd)}</div>
                       </div>
                     </div>
 
                     {/* PnL row */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="text-sm text-muted-foreground">PnL</div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-xs text-muted-foreground">PnL</div>
                       <div className="text-right">
-                        <div className="text-xl font-semibold tabular-nums">
+                        <div className="text-base font-semibold tabular-nums">
                           {(glazedUsd - priceUsd) >= 0 ? '+' : '-'}Ξ{Math.abs((glazedUsd - priceUsd) / ethUsdPrice).toFixed(4)}
                         </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
+                        <div className="text-[10px] text-muted-foreground">
                           {(glazedUsd - priceUsd) >= 0 ? '+' : '-'}{formatUsd(Math.abs(glazedUsd - priceUsd))}
                         </div>
                       </div>
                     </div>
 
                     {/* Addition line */}
-                    <div className="border-t border-zinc-600 mb-4" />
+                    <div className="border-t border-zinc-600 mb-3" />
 
                     {/* Total row */}
                     <div className="flex items-center justify-between">
-                      <div className="text-sm text-muted-foreground">Total</div>
-                      <div className="text-2xl font-semibold tabular-nums">
+                      <div className="text-xs text-muted-foreground">Total</div>
+                      <div className="text-lg font-semibold tabular-nums">
                         {(glazedUsd + (glazedUsd - priceUsd)) >= 0 ? '+' : '-'}${Math.abs(glazedUsd + (glazedUsd - priceUsd)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     </div>
@@ -1626,6 +1598,7 @@ export default function RigDetailPage() {
             className="relative flex h-full w-full max-w-[520px] flex-col bg-background"
             style={{
               paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+              paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)",
             }}
           >
             {/* Header */}
@@ -1643,11 +1616,11 @@ export default function RigDetailPage() {
             {/* Content */}
             <div className="flex-1 flex flex-col px-4">
               {/* Title */}
-              <div className="mt-4 mb-6">
-                <h1 className="text-2xl font-semibold tracking-tight">
+              <div className="mt-2 mb-4">
+                <h1 className="text-xl font-semibold tracking-tight">
                   {tradeDirection === "buy" ? "Buy" : "Sell"} {tokenSymbol}
                 </h1>
-                <p className="text-[13px] text-zinc-500 mt-1">
+                <p className="text-[12px] text-zinc-500 mt-0.5">
                   {tradeDirection === "buy"
                     ? `Ξ${ethBalance.toFixed(4)} available`
                     : `${unitBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${tokenSymbol} available`
@@ -1656,17 +1629,17 @@ export default function RigDetailPage() {
               </div>
 
               {/* Amount display */}
-              <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <div className="flex items-center justify-between">
                   <span className="text-[13px] text-muted-foreground">Amount</span>
-                  <span className="text-lg font-semibold tabular-nums">
+                  <span className="text-base font-semibold tabular-nums">
                     {tradeDirection === "buy" ? `Ξ${tradeAmount || "0"}` : `${tradeAmount || "0"} ${tokenSymbol}`}
                   </span>
                 </div>
               </div>
 
               {/* Market price */}
-              <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <div className="flex items-center justify-between">
                   <span className="text-[13px] text-zinc-500">Market price</span>
                   <span className="text-[13px] font-medium tabular-nums">
@@ -1676,7 +1649,7 @@ export default function RigDetailPage() {
               </div>
 
               {/* Est. received */}
-              <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <div className="flex items-center justify-between">
                   <span className="text-[13px] text-zinc-500">Est. received</span>
                   <div className="flex items-center gap-2">
@@ -1696,7 +1669,7 @@ export default function RigDetailPage() {
               </div>
 
               {/* Trade Info - impact instead of slippage */}
-              <div className="flex items-center justify-end gap-3 py-3 text-[11px] text-zinc-500">
+              <div className="flex items-center justify-end gap-3 py-2 text-[11px] text-zinc-500">
                 <span>{tradeAmount && parseFloat(tradeAmount) > 0 ? (priceImpact?.toFixed(1) ?? "0") : "0"}% impact</span>
                 <span>·</span>
                 <span>
@@ -1959,6 +1932,7 @@ export default function RigDetailPage() {
               className="relative flex h-full w-full max-w-[520px] flex-col bg-background"
               style={{
                 paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+                paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)",
               }}
             >
               {/* Header */}
@@ -1979,16 +1953,16 @@ export default function RigDetailPage() {
               {/* Content */}
               <div className="flex-1 flex flex-col px-4">
                 {/* Title */}
-                <div className="mt-4 mb-6">
-                  <h1 className="text-2xl font-semibold tracking-tight">Add Liquidity</h1>
-                  <p className="text-[13px] text-muted-foreground mt-1">
+                <div className="mt-2 mb-4">
+                  <h1 className="text-xl font-semibold tracking-tight">Add Liquidity</h1>
+                  <p className="text-[12px] text-muted-foreground mt-0.5">
                     Provide {tokenSymbol} and DONUT to get LP tokens
                   </p>
                 </div>
 
                 {/* Token Input */}
-                <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                  <div className="flex items-center justify-between mb-2">
+                <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="flex items-center justify-between mb-1">
                     <span className="text-[13px] text-muted-foreground">You provide</span>
                     <button
                       onClick={() => setLiquidityAmount(tokenBalance.toFixed(2))}
@@ -1998,7 +1972,7 @@ export default function RigDetailPage() {
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-2xl font-semibold tabular-nums">
+                    <span className="text-xl font-semibold tabular-nums">
                       {liquidityAmount || "0"}
                     </span>
                     <div className="flex items-center gap-2 bg-zinc-800 rounded-full px-3 py-1.5">
@@ -2015,8 +1989,8 @@ export default function RigDetailPage() {
                 </div>
 
                 {/* Required DONUT */}
-                <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                  <div className="flex items-center justify-between mb-2">
+                <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="flex items-center justify-between mb-1">
                     <span className="text-[13px] text-muted-foreground">Required DONUT</span>
                     <button
                       onClick={() => {
@@ -2033,7 +2007,7 @@ export default function RigDetailPage() {
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-2xl font-semibold tabular-nums">
+                    <span className="text-xl font-semibold tabular-nums">
                       {requiredDonut.toFixed(2)}
                     </span>
                     <div className="flex items-center gap-2 bg-zinc-800 rounded-full px-3 py-1.5">
