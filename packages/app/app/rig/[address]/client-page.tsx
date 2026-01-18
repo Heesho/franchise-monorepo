@@ -2080,7 +2080,7 @@ export default function RigDetailPage() {
                       {requiredDonut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                     <div className="flex items-center gap-2 bg-zinc-800 rounded-full px-3 py-1.5">
-                      <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center">
+                      <div className="w-5 h-5 rounded-full bg-pink-500 flex items-center justify-center">
                         <div className="w-1.5 h-1.5 rounded-full bg-black" />
                       </div>
                       <span className="text-sm font-medium">DONUT</span>
