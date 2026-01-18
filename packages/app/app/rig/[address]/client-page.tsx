@@ -1541,49 +1541,52 @@ export default function RigDetailPage() {
                 </div>
               )}
 
-              {/* Message Input - at bottom above action bar */}
-              <div className="mb-4">
-                <input
-                  type="text"
-                  value={customMessage}
-                  onChange={(e) => setCustomMessage(e.target.value)}
-                  placeholder={tokenMetadata?.defaultMessage || "gm"}
-                  maxLength={100}
-                  className="w-full rounded-xl bg-secondary px-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none"
-                />
-              </div>
             </div>
 
             {/* Bottom Action Bar */}
             <div className="fixed bottom-0 left-0 right-0 z-50 bg-zinc-800 flex justify-center" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}>
-              <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3 bg-background">
-                <div className="flex items-center gap-6">
-                  <div>
-                    <div className="text-muted-foreground text-[12px]">Mine Price</div>
-                    <div className="font-semibold text-[17px] tabular-nums">
-                      Ξ{priceEth.toFixed(6)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground text-[12px]">Balance</div>
-                    <div className="font-semibold text-[17px] tabular-nums">
-                      Ξ{ethBalance.toFixed(4)}
-                    </div>
-                  </div>
+              <div className="w-full max-w-[520px] px-4 py-3 bg-background">
+                {/* Message Input */}
+                <div className="mb-3">
+                  <input
+                    type="text"
+                    value={customMessage}
+                    onChange={(e) => setCustomMessage(e.target.value)}
+                    placeholder={tokenMetadata?.defaultMessage || "gm"}
+                    maxLength={100}
+                    className="w-full rounded-xl bg-secondary px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none"
+                  />
                 </div>
-                <button
-                  onClick={handleMine}
-                  disabled={isMineDisabled}
-                  className={cn(
-                    "w-32 h-10 text-[14px] font-semibold rounded-xl transition-all",
-                    mineResult === "failure"
-                      ? "bg-zinc-700 text-zinc-500"
-                      : "bg-white text-black hover:bg-zinc-200",
-                    isMineDisabled && !mineResult && "opacity-40 cursor-not-allowed"
-                  )}
-                >
-                  {buttonLabel}
-                </button>
+                {/* Price/Balance and Button */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <div className="text-muted-foreground text-[12px]">Mine Price</div>
+                      <div className="font-semibold text-[17px] tabular-nums">
+                        Ξ{priceEth.toFixed(6)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[12px]">Balance</div>
+                      <div className="font-semibold text-[17px] tabular-nums">
+                        Ξ{ethBalance.toFixed(4)}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleMine}
+                    disabled={isMineDisabled}
+                    className={cn(
+                      "w-32 h-10 text-[14px] font-semibold rounded-xl transition-all",
+                      mineResult === "failure"
+                        ? "bg-zinc-700 text-zinc-500"
+                        : "bg-white text-black hover:bg-zinc-200",
+                      isMineDisabled && !mineResult && "opacity-40 cursor-not-allowed"
+                    )}
+                  >
+                    {buttonLabel}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1801,6 +1804,7 @@ export default function RigDetailPage() {
               className="relative flex h-full w-full max-w-[520px] flex-col bg-background"
               style={{
                 paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+                paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)",
               }}
             >
               {/* Header */}
@@ -1818,18 +1822,18 @@ export default function RigDetailPage() {
               {/* Content */}
               <div className="flex-1 flex flex-col px-4">
                 {/* Title */}
-                <div className="mt-4 mb-6">
-                  <h1 className="text-2xl font-semibold tracking-tight">Buy WETH</h1>
-                  <p className="text-[13px] text-muted-foreground mt-1">
+                <div className="mt-2 mb-4">
+                  <h1 className="text-xl font-semibold tracking-tight">Buy WETH</h1>
+                  <p className="text-[12px] text-muted-foreground mt-0.5">
                     {lpBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tokenSymbol}-DONUT LP available
                   </p>
                 </div>
 
                 {/* You Pay */}
-                <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   <div className="flex items-center justify-between">
                     <span className="text-[13px] text-muted-foreground">You pay</span>
-                    <span className="text-lg font-semibold tabular-nums">
+                    <span className="text-base font-semibold tabular-nums">
                       {auctionPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP
                     </span>
                   </div>
@@ -1842,10 +1846,10 @@ export default function RigDetailPage() {
                 </div>
 
                 {/* You Receive */}
-                <div className="py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <div className="py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   <div className="flex items-center justify-between">
                     <span className="text-[13px] text-muted-foreground">You receive</span>
-                    <span className="text-lg font-semibold tabular-nums">
+                    <span className="text-base font-semibold tabular-nums">
                       Ξ{wethReward.toFixed(6)}
                     </span>
                   </div>
@@ -1858,7 +1862,7 @@ export default function RigDetailPage() {
                 </div>
 
                 {/* Profit indicator */}
-                <div className="flex items-center justify-end gap-3 py-3 text-[11px] text-muted-foreground">
+                <div className="flex items-center justify-end gap-3 py-2 text-[11px] text-muted-foreground">
                   <span className="tabular-nums">
                     {profitUsd >= 0 ? "+" : ""}{profitUsd.toFixed(2)} {profitUsd >= 0 ? "profit" : "loss"}
                   </span>
@@ -1868,30 +1872,25 @@ export default function RigDetailPage() {
                 <div className="flex-1" />
 
                 {/* Info text */}
-                <p className="text-[11px] text-muted-foreground text-center mb-4">
+                <p className="text-[11px] text-muted-foreground text-center mb-3">
                   Auction price decays over time. Buy when profitable.
                 </p>
 
                 {/* Action button */}
-                <div
-                  className="pb-4"
-                  style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}
+                <button
+                  onClick={handleAuctionBuy}
+                  disabled={!canBuy}
+                  className={cn(
+                    "w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-4",
+                    auctionResult === "success"
+                      ? "bg-green-500 text-black"
+                      : canBuy
+                        ? "bg-white text-black hover:bg-zinc-200"
+                        : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                  )}
                 >
-                  <button
-                    onClick={handleAuctionBuy}
-                    disabled={!canBuy}
-                    className={cn(
-                      "w-full h-11 rounded-xl font-semibold text-[14px] transition-all",
-                      auctionResult === "success"
-                        ? "bg-green-500 text-black"
-                        : canBuy
-                          ? "bg-white text-black hover:bg-zinc-200"
-                          : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-                    )}
-                  >
-                    {auctionButtonText}
-                  </button>
-                </div>
+                  {auctionButtonText}
+                </button>
               </div>
             </div>
             <NavBar />
