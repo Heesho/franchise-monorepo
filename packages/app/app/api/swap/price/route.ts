@@ -127,6 +127,57 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // If direct route fails and we're buying token with ETH, try routing through DONUT
+    if (isSellingNativeEth && !isBuyingNativeEth) {
+      // Step 1: ETH -> DONUT (with fee on input since we're selling ETH)
+      const step1Data = await fetchKyberRoute(sellToken, DONUT_ADDRESS, sellAmount, "currency_in");
+
+      if (step1Data.code !== 0 || !step1Data.data?.routeSummary) {
+        return NextResponse.json(
+          { error: "No route found for ETH->DONUT", details: { direct: directData, step1: step1Data } },
+          { status: 404 }
+        );
+      }
+
+      const step1Summary = step1Data.data.routeSummary;
+      const donutAmount = step1Summary.amountOut;
+
+      // Step 2: DONUT -> Token
+      const step2Data = await fetchKyberRoute(DONUT_ADDRESS, buyToken, donutAmount, "");
+
+      if (step2Data.code !== 0 || !step2Data.data?.routeSummary) {
+        return NextResponse.json(
+          { error: "No route found for DONUT->Token", details: { step1: step1Data, step2: step2Data } },
+          { status: 404 }
+        );
+      }
+
+      const step2Summary = step2Data.data.routeSummary;
+
+      // Combine the results
+      const totalGas = (parseInt(step1Summary.gas || "0") + parseInt(step2Summary.gas || "0")).toString();
+
+      return NextResponse.json({
+        sellAmount: sellAmount,
+        buyAmount: step2Summary.amountOut,
+        sellAmountUsd: step1Summary.amountInUsd || "0",
+        buyAmountUsd: step2Summary.amountOutUsd || "0",
+        price: (Number(step2Summary.amountOut) / Number(sellAmount)).toString(),
+        estimatedGas: totalGas,
+        fees: {
+          integratorFee: {
+            amount: step1Summary.extraFee?.feeAmount || "0",
+            token: sellToken,
+          },
+        },
+        // Store both route summaries for building transaction later
+        routeSummary: step1Summary,
+        routeSummary2: step2Summary,
+        intermediateAmount: donutAmount,
+        routeType: "two-hop",
+      });
+    }
+
     // No route found
     return NextResponse.json(
       { error: directData.message || "No route found", details: directData },

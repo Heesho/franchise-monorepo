@@ -35,12 +35,25 @@ export type SwapQuote = {
     gas: string;
     gasPrice: string;
   };
+  // Second transaction for two-hop routes
+  transaction2?: {
+    to: string;
+    data: string;
+    value: string;
+    gas: string;
+    gasPrice: string;
+  };
   // Allowance info
   issues?: {
     allowance?: {
       spender: string;
-      actual: string;
-      expected: string;
+      actual?: string;
+      expected?: string;
+      token?: string;
+    };
+    allowance2?: {
+      spender: string;
+      token: string;
     };
   };
   // Liquidity sources used
@@ -50,6 +63,10 @@ export type SwapQuote = {
       proportionBps: string;
     }>;
   };
+  // Route type: "direct" or "two-hop"
+  routeType?: "direct" | "two-hop";
+  // Intermediate amount for two-hop routes (DONUT amount)
+  intermediateAmount?: string;
 };
 
 type UseSwapQuoteParams = {

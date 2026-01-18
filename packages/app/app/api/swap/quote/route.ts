@@ -210,6 +210,87 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // If direct route fails and we're buying token with ETH, try two-hop through DONUT
+    if (isSellingNativeEth && !isBuyingNativeEth) {
+      // Step 1: ETH -> DONUT (with fee on input since we're selling ETH)
+      const step1Data = await fetchKyberRoute(sellToken, DONUT_ADDRESS, sellAmount, "currency_in");
+
+      if (step1Data.code !== 0 || !step1Data.data?.routeSummary) {
+        return NextResponse.json(
+          { error: "No route found for ETH->DONUT", details: { direct: directData, step1: step1Data } },
+          { status: 404 }
+        );
+      }
+
+      const step1Summary = step1Data.data.routeSummary;
+      const donutAmount = step1Summary.amountOut;
+
+      // Step 2: DONUT -> Token
+      const step2Data = await fetchKyberRoute(DONUT_ADDRESS, buyToken, donutAmount, "");
+
+      if (step2Data.code !== 0 || !step2Data.data?.routeSummary) {
+        return NextResponse.json(
+          { error: "No route found for DONUT->Token", details: { step1: step1Data, step2: step2Data } },
+          { status: 404 }
+        );
+      }
+
+      const step2Summary = step2Data.data.routeSummary;
+
+      // Build transactions for both steps
+      const build1Data = await buildKyberTx(step1Summary, taker, slippageTolerance);
+      const build2Data = await buildKyberTx(step2Summary, taker, slippageTolerance);
+
+      if (build1Data.code !== 0 || build2Data.code !== 0) {
+        return NextResponse.json(
+          { error: "Failed to build transaction", details: { build1: build1Data, build2: build2Data } },
+          { status: 400 }
+        );
+      }
+
+      const tx1Data = build1Data.data;
+      const tx2Data = build2Data.data;
+      const totalGas = (parseInt(step1Summary.gas || "0") + parseInt(step2Summary.gas || "0")).toString();
+
+      return NextResponse.json({
+        sellAmount: sellAmount,
+        buyAmount: step2Summary.amountOut,
+        price: (Number(step2Summary.amountOut) / Number(sellAmount)).toString(),
+        estimatedGas: totalGas,
+        fees: {
+          integratorFee: {
+            amount: step1Summary.extraFee?.feeAmount || "0",
+            token: sellToken,
+          },
+        },
+        // First transaction: ETH -> DONUT
+        transaction: {
+          to: tx1Data.routerAddress,
+          data: tx1Data.data,
+          value: tx1Data.transactionValue || sellAmount,
+          gas: tx1Data.gas || step1Summary.gas || "0",
+          gasPrice: tx1Data.gasPrice || "0",
+        },
+        // Second transaction: DONUT -> Token
+        transaction2: {
+          to: tx2Data.routerAddress,
+          data: tx2Data.data,
+          value: tx2Data.transactionValue || "0",
+          gas: tx2Data.gas || step2Summary.gas || "0",
+          gasPrice: tx2Data.gasPrice || "0",
+        },
+        issues: {
+          // DONUT needs approval for step 2
+          allowance: {
+            spender: tx2Data.routerAddress,
+            token: DONUT_ADDRESS,
+          },
+        },
+        intermediateAmount: donutAmount,
+        routeType: "two-hop",
+      });
+    }
+
     // No route found
     return NextResponse.json(
       { error: directData.message || "No route found", details: directData },

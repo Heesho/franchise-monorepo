@@ -510,34 +510,101 @@ export default function RigDetailPage() {
   const handleTrade = useCallback(async () => {
     if (!tradeQuote?.transaction || !address || !tradeAmount) return;
 
+    const isTwoHop = tradeQuote.routeType === "two-hop" && tradeQuote.transaction2;
+
     if (tradeDirection === "sell" && rigInfo?.unitAddress) {
-      // Sells: use batched transaction (approve + swap)
+      // Sells: Token -> DONUT -> ETH (two-hop) or Token -> ETH (direct)
       const sellAmountWei = parseUnits(tradeAmount, 18);
-      const approveCall = encodeApproveCall(
-        rigInfo.unitAddress as Address,
-        tradeQuote.transaction.to as Address,
-        sellAmountWei
-      );
 
-      const swapCall: Call = {
-        to: tradeQuote.transaction.to as Address,
-        data: tradeQuote.transaction.data as `0x${string}`,
-        value: BigInt(tradeQuote.transaction.value || "0"),
-      };
+      if (isTwoHop) {
+        // Two-hop sell: approve token, swap to DONUT, approve DONUT, swap to ETH
+        const approveTokenCall = encodeApproveCall(
+          rigInfo.unitAddress as Address,
+          tradeQuote.transaction.to as Address,
+          sellAmountWei
+        );
 
-      try {
-        await executeBatch([approveCall, swapCall]);
-      } catch (error) {
-        console.error("Trade failed:", error);
+        const swap1Call: Call = {
+          to: tradeQuote.transaction.to as Address,
+          data: tradeQuote.transaction.data as `0x${string}`,
+          value: BigInt(tradeQuote.transaction.value || "0"),
+        };
+
+        const donutAmount = BigInt(tradeQuote.intermediateAmount || "0");
+        const approveDonutCall = encodeApproveCall(
+          CONTRACT_ADDRESSES.donut as Address,
+          tradeQuote.transaction2!.to as Address,
+          donutAmount
+        );
+
+        const swap2Call: Call = {
+          to: tradeQuote.transaction2!.to as Address,
+          data: tradeQuote.transaction2!.data as `0x${string}`,
+          value: BigInt(tradeQuote.transaction2!.value || "0"),
+        };
+
+        try {
+          await executeBatch([approveTokenCall, swap1Call, approveDonutCall, swap2Call]);
+        } catch (error) {
+          console.error("Trade failed:", error);
+        }
+      } else {
+        // Direct sell: just approve token and swap
+        const approveCall = encodeApproveCall(
+          rigInfo.unitAddress as Address,
+          tradeQuote.transaction.to as Address,
+          sellAmountWei
+        );
+
+        const swapCall: Call = {
+          to: tradeQuote.transaction.to as Address,
+          data: tradeQuote.transaction.data as `0x${string}`,
+          value: BigInt(tradeQuote.transaction.value || "0"),
+        };
+
+        try {
+          await executeBatch([approveCall, swapCall]);
+        } catch (error) {
+          console.error("Trade failed:", error);
+        }
       }
     } else {
-      // Buys: no approval needed, just swap directly
-      sendTransaction({
-        to: tradeQuote.transaction.to as Address,
-        data: tradeQuote.transaction.data as `0x${string}`,
-        value: BigInt(tradeQuote.transaction.value || "0"),
-        chainId: DEFAULT_CHAIN_ID,
-      });
+      // Buys: ETH -> DONUT -> Token (two-hop) or ETH -> Token (direct)
+      if (isTwoHop) {
+        // Two-hop buy: swap ETH to DONUT, approve DONUT, swap to Token
+        const swap1Call: Call = {
+          to: tradeQuote.transaction.to as Address,
+          data: tradeQuote.transaction.data as `0x${string}`,
+          value: BigInt(tradeQuote.transaction.value || "0"),
+        };
+
+        const donutAmount = BigInt(tradeQuote.intermediateAmount || "0");
+        const approveDonutCall = encodeApproveCall(
+          CONTRACT_ADDRESSES.donut as Address,
+          tradeQuote.transaction2!.to as Address,
+          donutAmount
+        );
+
+        const swap2Call: Call = {
+          to: tradeQuote.transaction2!.to as Address,
+          data: tradeQuote.transaction2!.data as `0x${string}`,
+          value: BigInt(tradeQuote.transaction2!.value || "0"),
+        };
+
+        try {
+          await executeBatch([swap1Call, approveDonutCall, swap2Call]);
+        } catch (error) {
+          console.error("Trade failed:", error);
+        }
+      } else {
+        // Direct buy: no approval needed, just swap
+        sendTransaction({
+          to: tradeQuote.transaction.to as Address,
+          data: tradeQuote.transaction.data as `0x${string}`,
+          value: BigInt(tradeQuote.transaction.value || "0"),
+          chainId: DEFAULT_CHAIN_ID,
+        });
+      }
     }
   }, [tradeQuote, address, tradeAmount, tradeDirection, rigInfo?.unitAddress, executeBatch, sendTransaction]);
 
@@ -1693,16 +1760,16 @@ export default function RigDetailPage() {
                   )}
                 </span>
               </div>
+            </div>
 
-              {/* Spacer */}
-              <div className="flex-1" />
-
+            {/* Bottom section: Number pad + Button */}
+            <div className="px-4 pb-4 mt-auto" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}>
               {/* Trade Button */}
               <button
                 onClick={handleTrade}
                 disabled={!canTrade || isTradePending || tradeResult !== null}
                 className={cn(
-                  "w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-4",
+                  "w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-3",
                   canTrade && !isTradePending && tradeResult === null
                     ? "bg-white text-black hover:bg-zinc-200"
                     : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
@@ -1712,53 +1779,48 @@ export default function RigDetailPage() {
               </button>
 
               {/* Number pad */}
-              <div
-                className="pb-4"
-                style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}
-              >
-                <div className="grid grid-cols-3 gap-2">
-                  {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"].map(
-                    (key) => (
-                      <NumPadButton
-                        key={key}
-                        value={key}
-                        onClick={(value) => {
-                          setTradeAmount((prev) => {
-                            const current = prev || "0";
-                            if (value === "backspace") {
-                              if (current.length <= 1) return "";
-                              return current.slice(0, -1);
-                            }
-                            if (value === ".") {
-                              if (current.includes(".")) return current;
-                              return current + ".";
-                            }
-                            // Limit decimal places: 6 for ETH, 2 for tokens
-                            const maxDecimals = tradeDirection === "buy" ? 6 : 2;
-                            const decimalIndex = current.indexOf(".");
-                            if (decimalIndex !== -1) {
-                              const decimals = current.length - decimalIndex - 1;
-                              if (decimals >= maxDecimals) return current;
-                            }
-                            // Replace initial 0
-                            if (current === "0" && value !== ".") {
-                              return value;
-                            }
-                            // Limit total length
-                            if (current.length >= 12) return current;
-                            return current + value;
-                          });
-                        }}
-                      >
-                        {key === "backspace" ? (
-                          <Delete className="w-6 h-6" />
-                        ) : (
-                          key
-                        )}
-                      </NumPadButton>
-                    )
-                  )}
-                </div>
+              <div className="grid grid-cols-3 gap-1">
+                {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"].map(
+                  (key) => (
+                    <NumPadButton
+                      key={key}
+                      value={key}
+                      onClick={(value) => {
+                        setTradeAmount((prev) => {
+                          const current = prev || "0";
+                          if (value === "backspace") {
+                            if (current.length <= 1) return "";
+                            return current.slice(0, -1);
+                          }
+                          if (value === ".") {
+                            if (current.includes(".")) return current;
+                            return current + ".";
+                          }
+                          // Limit decimal places: 6 for ETH, 2 for tokens
+                          const maxDecimals = tradeDirection === "buy" ? 6 : 2;
+                          const decimalIndex = current.indexOf(".");
+                          if (decimalIndex !== -1) {
+                            const decimals = current.length - decimalIndex - 1;
+                            if (decimals >= maxDecimals) return current;
+                          }
+                          // Replace initial 0
+                          if (current === "0" && value !== ".") {
+                            return value;
+                          }
+                          // Limit total length
+                          if (current.length >= 12) return current;
+                          return current + value;
+                        });
+                      }}
+                    >
+                      {key === "backspace" ? (
+                        <Delete className="w-6 h-6" />
+                      ) : (
+                        key
+                      )}
+                    </NumPadButton>
+                  )
+                )}
               </div>
             </div>
           </div>
@@ -2024,16 +2086,16 @@ export default function RigDetailPage() {
                     You receive ~ {lpTokensReceived.toFixed(4)} LP tokens
                   </span>
                 </div>
+              </div>
 
-                {/* Spacer */}
-                <div className="flex-1" />
-
+              {/* Bottom section: Number pad + Button */}
+              <div className="px-4 pb-4 mt-auto" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}>
                 {/* Action button */}
                 <button
                   onClick={handleAddLiquidity}
                   disabled={!canCreateLp}
                   className={cn(
-                    "w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-4",
+                    "w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-3",
                     lpResult === "success"
                       ? "bg-green-500 text-black"
                       : canCreateLp
@@ -2045,52 +2107,47 @@ export default function RigDetailPage() {
                 </button>
 
                 {/* Number pad */}
-                <div
-                  className="pb-4"
-                  style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}
-                >
-                  <div className="grid grid-cols-3 gap-2">
-                    {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"].map(
-                      (key) => (
-                        <NumPadButton
-                          key={key}
-                          value={key}
-                          onClick={(value) => {
-                            setLiquidityAmount((prev) => {
-                              const current = prev || "0";
-                              if (value === "backspace") {
-                                if (current.length <= 1) return "";
-                                return current.slice(0, -1);
-                              }
-                              if (value === ".") {
-                                if (current.includes(".")) return current;
-                                return current + ".";
-                              }
-                              // Limit decimal places
-                              const decimalIndex = current.indexOf(".");
-                              if (decimalIndex !== -1) {
-                                const decimals = current.length - decimalIndex - 1;
-                                if (decimals >= 2) return current;
-                              }
-                              // Replace initial 0
-                              if (current === "0" && value !== ".") {
-                                return value;
-                              }
-                              // Limit total length
-                              if (current.length >= 12) return current;
-                              return current + value;
-                            });
-                          }}
-                        >
-                          {key === "backspace" ? (
-                            <Delete className="w-6 h-6" />
-                          ) : (
-                            key
-                          )}
-                        </NumPadButton>
-                      )
-                    )}
-                  </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"].map(
+                    (key) => (
+                      <NumPadButton
+                        key={key}
+                        value={key}
+                        onClick={(value) => {
+                          setLiquidityAmount((prev) => {
+                            const current = prev || "0";
+                            if (value === "backspace") {
+                              if (current.length <= 1) return "";
+                              return current.slice(0, -1);
+                            }
+                            if (value === ".") {
+                              if (current.includes(".")) return current;
+                              return current + ".";
+                            }
+                            // Limit decimal places
+                            const decimalIndex = current.indexOf(".");
+                            if (decimalIndex !== -1) {
+                              const decimals = current.length - decimalIndex - 1;
+                              if (decimals >= 2) return current;
+                            }
+                            // Replace initial 0
+                            if (current === "0" && value !== ".") {
+                              return value;
+                            }
+                            // Limit total length
+                            if (current.length >= 12) return current;
+                            return current + value;
+                          });
+                        }}
+                      >
+                        {key === "backspace" ? (
+                          <Delete className="w-6 h-6" />
+                        ) : (
+                          key
+                        )}
+                      </NumPadButton>
+                    )
+                  )}
                 </div>
               </div>
             </div>
