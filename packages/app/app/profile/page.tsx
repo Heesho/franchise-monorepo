@@ -74,10 +74,10 @@ function MinedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserRigData; donutUs
       .catch(() => {});
   }, [rig.rigUri]);
 
-  // Calculate value: userMined * unitPrice (in DONUT) * donutUsdPrice
-  const minedAmount = Number(formatEther(rig.userMined));
+  // Calculate value: userBalance * unitPrice (in DONUT) * donutUsdPrice
+  const balanceAmount = Number(formatEther(rig.userBalance));
   const unitPriceDonut = rig.unitPrice ? Number(formatEther(rig.unitPrice)) : 0;
-  const valueUsd = minedAmount * unitPriceDonut * donutUsdPrice;
+  const valueUsd = balanceAmount * unitPriceDonut * donutUsdPrice;
 
   return (
     <Link
@@ -91,7 +91,7 @@ function MinedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserRigData; donutUs
       <div>
         <div className="font-semibold text-[15px]">{rig.tokenSymbol}</div>
         <div className="text-[13px] text-muted-foreground">
-          {formatAmount(minedAmount)} mined
+          {rig.tokenName}
         </div>
       </div>
       <div className="text-right">
@@ -99,7 +99,7 @@ function MinedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserRigData; donutUs
           {formatCurrency(valueUsd)}
         </div>
         <div className="text-[13px] tabular-nums text-muted-foreground">
-          {formatAmount(minedAmount)} {rig.tokenSymbol}
+          {formatAmount(balanceAmount)} {rig.tokenSymbol}
         </div>
       </div>
     </Link>
@@ -185,12 +185,19 @@ export default function ProfilePage() {
   const userDisplayName = getUserDisplayName(user);
   const userAvatarUrl = user?.pfpUrl ?? null;
 
-  // Calculate total portfolio value
-  const totalValue = minedRigs.reduce((acc, rig) => {
-    const minedAmount = Number(formatEther(rig.userMined));
+  // Calculate USD value for each rig (for sorting and total)
+  const rigsWithValue = minedRigs.map((rig) => {
+    const balanceAmount = Number(formatEther(rig.userBalance));
     const unitPriceDonut = rig.unitPrice ? Number(formatEther(rig.unitPrice)) : 0;
-    return acc + (minedAmount * unitPriceDonut * donutUsdPrice);
-  }, 0);
+    const valueUsd = balanceAmount * unitPriceDonut * donutUsdPrice;
+    return { rig, valueUsd };
+  });
+
+  // Sort by USD value (highest first)
+  const sortedRigs = [...rigsWithValue].sort((a, b) => b.valueUsd - a.valueUsd);
+
+  // Calculate total portfolio value
+  const totalValue = rigsWithValue.reduce((acc, { valueUsd }) => acc + valueUsd, 0);
 
   return (
     <main className="flex h-screen w-screen justify-center bg-zinc-800">
@@ -273,21 +280,21 @@ export default function ProfilePage() {
             </div>
           ) : activeTab === "holdings" ? (
             <div>
-              {minedRigs.length === 0 ? (
+              {sortedRigs.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                   <Pickaxe className="w-10 h-10 mb-3 opacity-30" />
-                  <p className="text-[15px] font-medium">No tokens mined yet</p>
+                  <p className="text-[15px] font-medium">No tokens held yet</p>
                   <p className="text-[13px] mt-1 opacity-70">
                     Start mining to build your portfolio!
                   </p>
                 </div>
               ) : (
-                minedRigs.map((rig, index) => (
+                sortedRigs.map(({ rig }, index) => (
                   <MinedRigRow
                     key={rig.address}
                     rig={rig}
                     donutUsdPrice={donutUsdPrice}
-                    isLast={index === minedRigs.length - 1}
+                    isLast={index === sortedRigs.length - 1}
                   />
                 ))
               )}

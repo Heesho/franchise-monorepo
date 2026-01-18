@@ -25,6 +25,7 @@ export type UserRigData = {
   unitPrice: bigint;
   totalMinted: bigint;
   userMined: bigint;
+  userBalance: bigint;
   userSpent: bigint;
   userEarned: bigint;
 };
@@ -111,12 +112,45 @@ export function useUserProfile(accountAddress: `0x${string}` | undefined) {
     },
   });
 
+  // Get unit addresses for balance fetching
+  const unitAddresses = (rigDetails ?? []).map((r) => r.unit?.toLowerCase() as `0x${string}`).filter(Boolean);
+
+  // Fetch token balances for each unit
+  const balanceContracts = unitAddresses.map((unitAddress) => ({
+    address: unitAddress,
+    abi: [
+      {
+        name: "balanceOf",
+        type: "function",
+        stateMutability: "view",
+        inputs: [{ name: "account", type: "address" }],
+        outputs: [{ name: "", type: "uint256" }],
+      },
+    ] as const,
+    functionName: "balanceOf" as const,
+    args: [accountAddress ?? zeroAddress] as const,
+    chainId: base.id,
+  }));
+
+  const { data: balances, isLoading: isLoadingBalances } = useReadContracts({
+    contracts: balanceContracts,
+    query: {
+      enabled: unitAddresses.length > 0 && !!accountAddress,
+      refetchInterval: 30_000,
+    },
+  });
+
   // Combine data for mined rigs
   const minedRigs: UserRigData[] = (rigAccounts ?? []).map((ra) => {
     const rigAddr = ra.rig.id.toLowerCase();
     const rigIndex = rigAddresses.findIndex((addr) => addr === rigAddr);
     const state = rigStates?.[rigIndex]?.result as RigState | undefined;
     const subgraphRig = rigDetails?.find((r) => r.id.toLowerCase() === rigAddr);
+
+    // Find balance by matching unit address
+    const unitAddr = subgraphRig?.unit?.toLowerCase();
+    const balanceIndex = unitAddresses.findIndex((addr) => addr === unitAddr);
+    const balance = balances?.[balanceIndex]?.result as bigint | undefined;
 
     return {
       address: rigAddr as `0x${string}`,
@@ -129,6 +163,7 @@ export function useUserProfile(accountAddress: `0x${string}` | undefined) {
       unitPrice: state?.unitPrice ?? 0n,
       totalMinted: subgraphRig ? BigInt(Math.floor(parseFloat(subgraphRig.minted) * 1e18)) : 0n,
       userMined: BigInt(Math.floor(parseFloat(ra.mined) * 1e18)),
+      userBalance: balance ?? 0n,
       userSpent: BigInt(Math.floor(parseFloat(ra.spent) * 1e18)),
       userEarned: BigInt(Math.floor(parseFloat(ra.earned) * 1e18)),
     };
@@ -169,7 +204,7 @@ export function useUserProfile(accountAddress: `0x${string}` | undefined) {
     };
   });
 
-  const isLoading = isLoadingAccount || isLoadingRigAccounts || isLoadingRigDetails || isLoadingStates || isLoadingLaunchedStates;
+  const isLoading = isLoadingAccount || isLoadingRigAccounts || isLoadingRigDetails || isLoadingStates || isLoadingBalances || isLoadingLaunchedStates;
 
   return {
     minedRigs,
