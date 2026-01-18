@@ -520,7 +520,7 @@ export default function LaunchPage() {
               <div>
                 <div className="text-muted-foreground text-[12px]">Launch fee</div>
                 <div className="flex items-center gap-1">
-                  <span className="inline-block w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                  <span className="inline-block w-4 h-4 rounded-full bg-pink-500 flex items-center justify-center">
                     <span className="w-1.5 h-1.5 rounded-full bg-black" />
                   </span>
                   <span className="font-semibold text-[17px] tabular-nums">1,000</span>
@@ -530,7 +530,7 @@ export default function LaunchPage() {
               <div>
                 <div className="text-muted-foreground text-[12px]">Balance</div>
                 <div className="flex items-center gap-1">
-                  <span className="inline-block w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                  <span className="inline-block w-4 h-4 rounded-full bg-pink-500 flex items-center justify-center">
                     <span className="w-1.5 h-1.5 rounded-full bg-black" />
                   </span>
                   <span className="font-semibold text-[17px] tabular-nums">
