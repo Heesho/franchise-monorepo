@@ -70,6 +70,14 @@ function LoadingDots() {
   );
 }
 
+// Format number with commas (e.g., "100000" -> "100,000", "100000.5" -> "100,000.5")
+function formatWithCommas(value: string): string {
+  if (!value) return "0";
+  const parts = value.split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return parts.join(".");
+}
+
 // Number pad button component
 function NumPadButton({
   value,
@@ -1703,7 +1711,7 @@ export default function RigDetailPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-[13px] text-muted-foreground">Amount</span>
                   <span className="text-base font-semibold tabular-nums">
-                    {tradeDirection === "buy" ? `Ξ${tradeAmount || "0"}` : `${tradeAmount || "0"} ${tokenSymbol}`}
+                    {tradeDirection === "buy" ? `Ξ${formatWithCommas(tradeAmount || "0")}` : `${formatWithCommas(tradeAmount || "0")} ${tokenSymbol}`}
                   </span>
                 </div>
               </div>
@@ -2034,7 +2042,7 @@ export default function RigDetailPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xl font-semibold tabular-nums">
-                      {liquidityAmount || "0"}
+                      {formatWithCommas(liquidityAmount || "0")}
                     </span>
                     <div className="flex items-center gap-2 bg-zinc-800 rounded-full px-3 py-1.5">
                       {tokenLogoUrl ? (
@@ -2069,7 +2077,7 @@ export default function RigDetailPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xl font-semibold tabular-nums">
-                      {requiredDonut.toFixed(2)}
+                      {requiredDonut.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                     <div className="flex items-center gap-2 bg-zinc-800 rounded-full px-3 py-1.5">
                       <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center">
