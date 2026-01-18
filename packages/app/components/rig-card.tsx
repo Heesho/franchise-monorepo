@@ -110,7 +110,7 @@ export function RigCard({ rig, donutUsdPrice = 0.01, isTopBump = false, isNewBum
             Ξ{formatEth(rig.price, 5)}
           </div>
           <div className="text-[13px] text-muted-foreground mt-0.5">
-            {formatUsd(marketCapUsd)}
+            <span className="text-[10px] opacity-60 mr-0.5">MC</span>{formatUsd(marketCapUsd)}
           </div>
         </div>
       </div>
