@@ -6,6 +6,7 @@ import { formatEther } from "viem";
 import type { RigListItem } from "@/hooks/useAllRigs";
 import { cn } from "@/lib/utils";
 import { ipfsToHttp } from "@/lib/constants";
+import { Sparkline } from "@/components/sparkline";
 
 const formatEth = (value: bigint, maximumFractionDigits = 4) => {
   if (value === 0n) return "0";
@@ -24,6 +25,7 @@ type RigCardProps = {
   isTopBump?: boolean;
   isNewBump?: boolean;
   isLast?: boolean;
+  sparklineData?: number[];
 };
 
 const formatUsd = (value: number) => {
@@ -33,7 +35,7 @@ const formatUsd = (value: number) => {
   return `$${value.toFixed(2)}`;
 };
 
-export function RigCard({ rig, donutUsdPrice = 0.01, isTopBump = false, isNewBump = false, isLast = false }: RigCardProps) {
+export function RigCard({ rig, donutUsdPrice = 0.01, isTopBump = false, isNewBump = false, isLast = false, sparklineData }: RigCardProps) {
   // Calculate market cap: totalMinted * unitPrice (in DONUT) * donutUsdPrice
   const marketCapUsd = rig.unitPrice > 0n
     ? Number(formatEther(rig.totalMinted)) * Number(formatEther(rig.unitPrice)) * donutUsdPrice
@@ -63,9 +65,8 @@ export function RigCard({ rig, donutUsdPrice = 0.01, isTopBump = false, isNewBum
     <Link href={`/rig/${rig.address}`} className="block">
       <div
         className={cn(
-          "flex items-center gap-3 py-4 transition-colors hover:bg-white/[0.02]",
-          isNewBump && "animate-bump-in bg-white/[0.05]",
-          isTopBump && !isNewBump && ""
+          "flex items-center gap-3 py-4 px-2 -mx-2 rounded-xl transition-colors hover:bg-white/[0.02]",
+          isNewBump && "animate-bump-in"
         )}
         style={{ borderBottom: isLast ? "none" : "1px solid rgba(255,255,255,0.06)" }}
       >
@@ -85,7 +86,7 @@ export function RigCard({ rig, donutUsdPrice = 0.01, isTopBump = false, isNewBum
         </div>
 
         {/* Token Symbol & Name */}
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 w-24">
           <div className="font-semibold text-[15px] truncate">
             {rig.tokenSymbol}
           </div>
@@ -94,8 +95,17 @@ export function RigCard({ rig, donutUsdPrice = 0.01, isTopBump = false, isNewBum
           </div>
         </div>
 
+        {/* Sparkline Chart */}
+        <div className="flex-1 flex justify-center items-center px-2">
+          <Sparkline
+            data={sparklineData ?? []}
+            width={70}
+            height={32}
+          />
+        </div>
+
         {/* Price & Market Cap */}
-        <div className="flex-shrink-0 text-right">
+        <div className="flex-shrink-0 text-right min-w-[90px]">
           <div className="text-[15px] font-medium tabular-nums">
             Ξ{formatEth(rig.price, 5)}
           </div>

@@ -366,18 +366,18 @@ export default function LaunchPage() {
     !isConnected;
 
   return (
-    <main className="flex h-screen w-screen justify-center overflow-hidden bg-background text-foreground">
+    <main className="flex h-screen w-screen justify-center overflow-hidden bg-zinc-800 text-foreground">
       <div
-        className="relative flex h-full w-full max-w-[520px] flex-1 flex-col overflow-hidden rounded-[28px] bg-background px-4 shadow-inner"
+        className="relative flex h-full w-full max-w-[520px] flex-col overflow-hidden bg-background px-4"
         style={{
-          paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+          paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)",
           paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 72px)",
         }}
       >
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Header */}
-          <div className="mb-2">
-            <h1 className="text-2xl font-semibold tracking-tight">Launch</h1>
+          <div className="pb-2">
+            <h1 className="text-2xl font-semibold tracking-tight mb-4">Launch</h1>
           </div>
 
           {/* Launch Form */}
@@ -513,55 +513,53 @@ export default function LaunchPage() {
         </div>
 
         {/* Fixed Bottom Action Bar */}
-        <div className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur-sm">
-          <div className="max-w-[520px] mx-auto px-2 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+72px)]">
-            <div className="flex items-center justify-between gap-4">
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center bg-zinc-800" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}>
+          <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3 bg-background">
+            <div className="flex items-center gap-6">
               {/* Launch Fee */}
-              <div className="flex-1">
-                <div className="text-xs text-muted-foreground mb-1">Launch fee</div>
-                <div className="flex items-center gap-1.5">
-                  <span className="inline-block w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                    <span className="w-2 h-2 rounded-full bg-black" />
-                  </span>
-                  <span className="text-lg font-semibold text-white">1,000</span>
-                </div>
-                <div className="text-xs text-muted-foreground">~${(donutUsdPrice * 1000).toFixed(2)}</div>
-              </div>
-
-              {/* Balance and Button */}
-              <div className="text-right">
-                <div className="flex items-center justify-end gap-1 text-[10px] text-muted-foreground mb-1">
-                  <span>Balance:</span>
+              <div>
+                <div className="text-muted-foreground text-[12px]">Launch fee</div>
+                <div className="flex items-center gap-1">
                   <span className="inline-block w-4 h-4 rounded-full bg-primary flex items-center justify-center">
                     <span className="w-1.5 h-1.5 rounded-full bg-black" />
                   </span>
-                  <span className="text-white font-medium">
+                  <span className="font-semibold text-[17px] tabular-nums">1,000</span>
+                </div>
+              </div>
+              {/* Balance */}
+              <div>
+                <div className="text-muted-foreground text-[12px]">Balance</div>
+                <div className="flex items-center gap-1">
+                  <span className="inline-block w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                    <span className="w-1.5 h-1.5 rounded-full bg-black" />
+                  </span>
+                  <span className="font-semibold text-[17px] tabular-nums">
                     {userDonutBalance
                       ? Number(formatEther(userDonutBalance)).toLocaleString(undefined, {
-                          maximumFractionDigits: 2,
+                          maximumFractionDigits: 0,
                         })
                       : "0"}
                   </span>
                 </div>
-                <Button
-                  className="w-[calc(50vw-16px)] max-w-[244px] py-2.5 text-sm font-semibold rounded-lg bg-primary hover:bg-primary/90 text-black transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                  onClick={handleLaunch}
-                  disabled={isLaunchDisabled}
-                >
-                  {launchResult === "success" ? (
-                    "SUCCESS!"
-                  ) : launchResult === "failure" ? (
-                    "FAILED"
-                  ) : txStep === "uploading" ? (
-                    <>UPLOADING<LoadingDots /></>
-                  ) : txStep === "launching" || batchState === "pending" || batchState === "confirming" ? (
-                    <>LAUNCHING<LoadingDots /></>
-                  ) : (
-                    "LAUNCH"
-                  )}
-                </Button>
               </div>
             </div>
+            <Button
+              className="w-32 h-10 text-[14px] font-semibold rounded-xl bg-white hover:bg-zinc-200 text-black transition-all disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleLaunch}
+              disabled={isLaunchDisabled}
+            >
+              {launchResult === "success" ? (
+                "SUCCESS!"
+              ) : launchResult === "failure" ? (
+                "FAILED"
+              ) : txStep === "uploading" ? (
+                <>UPLOADING<LoadingDots /></>
+              ) : txStep === "launching" || batchState === "pending" || batchState === "confirming" ? (
+                <>LAUNCHING<LoadingDots /></>
+              ) : (
+                "LAUNCH"
+              )}
+            </Button>
           </div>
         </div>
       </div>

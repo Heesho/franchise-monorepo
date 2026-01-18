@@ -632,6 +632,71 @@ export async function getRigLeaderboard(
   }
 }
 
+// Get recent epochs for multiple rigs (for sparklines)
+export const GET_BATCH_RIG_EPOCHS_QUERY = gql`
+  query GetBatchRigEpochs($rigIds: [String!]!, $first: Int!) {
+    epoches(
+      where: { rig_: { id_in: $rigIds } }
+      orderBy: startTime
+      orderDirection: desc
+      first: $first
+    ) {
+      id
+      rig {
+        id
+      }
+      startTime
+      spent
+    }
+  }
+`;
+
+export async function getBatchRigEpochs(
+  rigIds: string[],
+  firstPerRig = 24 // Get last 24 epochs per rig for 1D chart
+): Promise<Record<string, { time: number; price: number }[]>> {
+  try {
+    // Fetch enough epochs to cover all rigs
+    const totalFirst = rigIds.length * firstPerRig;
+    const data = await client.request<{
+      epoches: { id: string; rig: { id: string }; startTime: string; spent: string }[];
+    }>(GET_BATCH_RIG_EPOCHS_QUERY, {
+      rigIds: rigIds.map(id => id.toLowerCase()),
+      first: Math.min(totalFirst, 1000), // Cap at 1000
+    });
+
+    // Group by rig using plain object (serializes better than Map)
+    const rigEpochsMap: Record<string, { time: number; price: number }[]> = {};
+
+    // Initialize all rigs with empty arrays
+    rigIds.forEach(id => {
+      rigEpochsMap[id.toLowerCase()] = [];
+    });
+
+    // Process epochs (using spent field like detail chart)
+    data.epoches.forEach(epoch => {
+      const rigId = epoch.rig.id.toLowerCase();
+      const epochs = rigEpochsMap[rigId];
+      if (epochs && epochs.length < firstPerRig) {
+        epochs.push({
+          time: parseInt(epoch.startTime),
+          price: parseFloat(epoch.spent),
+        });
+      }
+    });
+
+    // Reverse each array so oldest is first (for sparkline)
+    Object.keys(rigEpochsMap).forEach(rigId => {
+      rigEpochsMap[rigId] = rigEpochsMap[rigId].reverse();
+    });
+
+    return rigEpochsMap;
+  } catch (error) {
+    console.error("[getBatchRigEpochs] Error:", error);
+    return {};
+  }
+}
+
 // Legacy compatibility - maps old function names to new ones
 export const getMineHistory = getEpochs;
 export const getUserRigStats = getRigAccount;

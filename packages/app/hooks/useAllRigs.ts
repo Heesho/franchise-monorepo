@@ -97,8 +97,9 @@ export function useRigList(
   first = 20,
   skip = 0
 ) {
-  // Standardized polling frequency to prevent rate limiting
-  const refetchInterval = 60_000; // 60s for all sort types
+  // Trending/Bump polls faster for lively updates, others poll slower
+  const refetchInterval = sortBy === "trending" ? 10_000 : 60_000;
+  const staleTime = sortBy === "trending" ? 5_000 : 45_000;
 
   const { data: rigs, isLoading, error, refetch } = useQuery({
     queryKey: ["rigList", sortBy, first, skip],
@@ -112,7 +113,7 @@ export function useRigList(
       // "new" - sort by createdAt
       return getRigs(first, skip, "createdAt", "desc");
     },
-    staleTime: 45_000, // 45 seconds
+    staleTime,
     refetchInterval,
     refetchOnWindowFocus: false,
     retry: false, // Don't retry - fallback to on-chain instead

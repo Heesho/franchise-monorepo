@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { Search, Zap, Clock, Star, X } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { motion, LayoutGroup } from "framer-motion";
 
 import { NavBar } from "@/components/nav-bar";
 import { RigCard } from "@/components/rig-card";
 import { useExploreRigs, type SortOption } from "@/hooks/useAllRigs";
 import { useFarcaster } from "@/hooks/useFarcaster";
 import { getDonutPrice } from "@/lib/utils";
+import { getBatchRigEpochs } from "@/lib/subgraph-launchpad";
 import { DEFAULT_DONUT_PRICE_USD, PRICE_REFETCH_INTERVAL_MS } from "@/lib/constants";
 
 const SORT_OPTIONS: { value: SortOption; label: string; icon: typeof Zap }[] = [
@@ -28,6 +31,29 @@ export default function ExplorePage() {
 
   // Get rigs data
   const { rigs, isLoading } = useExploreRigs(sortBy, searchQuery, address);
+
+  // Get rig addresses for sparkline data
+  const rigAddresses = useMemo(() => rigs.map(r => r.address), [rigs]);
+
+  // Fetch sparkline data for all visible rigs
+  const { data: sparklineDataMap } = useQuery({
+    queryKey: ["sparklines", rigAddresses.join(",")],
+    queryFn: () => getBatchRigEpochs(rigAddresses, 24),
+    enabled: rigAddresses.length > 0,
+    staleTime: 30_000, // 30 seconds
+    refetchInterval: 60_000, // Refresh every 60 seconds
+    retry: 2, // Retry failed requests
+    retryDelay: 1000, // Wait 1s between retries
+  });
+
+  // Convert sparkline data to price arrays (spent values from epochs)
+  const getSparklineData = (rigAddress: string): number[] => {
+    const epochs = sparklineDataMap?.[rigAddress.toLowerCase()];
+    if (epochs && epochs.length > 0) {
+      return epochs.map(e => e.price);
+    }
+    return [];
+  };
 
   // Track when a new rig bumps to the top
   useEffect(() => {
@@ -128,16 +154,33 @@ export default function ExplorePage() {
               </p>
             </div>
           ) : (
-            rigs.map((rig, index) => (
-              <RigCard
-                key={rig.address}
-                rig={rig}
-                donutUsdPrice={donutUsdPrice}
-                isTopBump={sortBy === "trending" && index === 0}
-                isNewBump={rig.address === newBumpAddress}
-                isLast={index === rigs.length - 1}
-              />
-            ))
+            <LayoutGroup>
+              {rigs.map((rig, index) => (
+                <motion.div
+                  key={rig.address}
+                  layoutId={rig.address}
+                  layout="position"
+                  initial={false}
+                  transition={{
+                    layout: {
+                      type: "spring",
+                      stiffness: 120,
+                      damping: 20,
+                      mass: 0.8
+                    }
+                  }}
+                >
+                  <RigCard
+                    rig={rig}
+                    donutUsdPrice={donutUsdPrice}
+                    isTopBump={sortBy === "trending" && index === 0}
+                    isNewBump={rig.address === newBumpAddress}
+                    isLast={index === rigs.length - 1}
+                    sparklineData={getSparklineData(rig.address)}
+                  />
+                </motion.div>
+              ))}
+            </LayoutGroup>
           )}
         </div>
       </div>

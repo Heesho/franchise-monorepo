@@ -8,11 +8,12 @@ import Link from "next/link";
 import {
   useBalance,
   useReadContract,
+  useReadContracts,
   useSendTransaction,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { formatEther, formatUnits, parseUnits, type Address, zeroAddress } from "viem";
+import { formatEther, formatUnits, parseEther, parseUnits, type Address, zeroAddress } from "viem";
 
 import { NavBar } from "@/components/nav-bar";
 import { LazyPriceChart } from "@/components/lazy-price-chart";
@@ -21,6 +22,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { MineHistoryItem } from "@/components/mine-history-item";
 import { TokenStats } from "@/components/token-stats";
 import { useRigState, useRigInfo } from "@/hooks/useRigState";
+import { useAuctionState } from "@/hooks/useAuctionState";
 import { useUserRigStats } from "@/hooks/useUserRigStats";
 import { usePriceHistory, type Timeframe } from "@/hooks/usePriceHistory";
 import { useDexScreener } from "@/hooks/useDexScreener";
@@ -35,9 +37,10 @@ import { useProfile } from "@/hooks/useBatchProfiles";
 import {
   useBatchedTransaction,
   encodeApproveCall,
+  encodeContractCall,
   type Call,
 } from "@/hooks/useBatchedTransaction";
-import { CONTRACT_ADDRESSES, MULTICALL_ABI, ERC20_ABI, NATIVE_ETH_ADDRESS } from "@/lib/contracts";
+import { CONTRACT_ADDRESSES, MULTICALL_ABI, ERC20_ABI, NATIVE_ETH_ADDRESS, UNIV2_ROUTER_ABI, UNIV2_PAIR_ABI, CORE_ABI } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 import { useSwapPrice, useSwapQuote, formatBuyAmount } from "@/hooks/useSwapQuote";
 import {
@@ -121,8 +124,7 @@ export default function RigDetailPage() {
   const [showLiquidityModal, setShowLiquidityModal] = useState(false);
   const [liquidityAmount, setLiquidityAmount] = useState("");
 
-  // Trade mode state
-  const [mode, setMode] = useState<"mine" | "trade">("mine");
+  // Trade state
   const [tradeDirection, setTradeDirection] = useState<"buy" | "sell">("buy"); // buy = ETH -> Unit, sell = Unit -> ETH
   const [tradeAmount, setTradeAmount] = useState("");
 
@@ -132,6 +134,7 @@ export default function RigDetailPage() {
   // Rig data
   const { rigState, refetch: refetchRigState } = useRigState(rigAddress, address);
   const { rigInfo } = useRigInfo(rigAddress);
+  const { auctionState, refetch: refetchAuctionState } = useAuctionState(rigAddress, address);
   const { stats: userStats } = useUserRigStats(address, rigAddress);
 
   // Mining price history for chart (from subgraph epochs, in USD)
@@ -209,10 +212,88 @@ export default function RigDetailPage() {
     query: { enabled: !!rigInfo?.unitAddress },
   });
 
+  // DONUT balance for liquidity
+  const { data: donutBalanceData, refetch: refetchDonutBalance } = useBalance({
+    address,
+    token: CONTRACT_ADDRESSES.donut as Address,
+    chainId: DEFAULT_CHAIN_ID,
+    query: { enabled: !!address },
+  });
+
+  // Get LP address from Core contract
+  const { data: lpAddressFromCore } = useReadContract({
+    address: CONTRACT_ADDRESSES.core as Address,
+    abi: CORE_ABI,
+    functionName: "rigToLP",
+    args: [rigAddress],
+    chainId: DEFAULT_CHAIN_ID,
+  });
+
+  // Read LP pair info (reserves, token0/token1)
+  const { data: lpPairInfo, refetch: refetchLpPairInfo } = useReadContracts({
+    contracts: lpAddressFromCore ? [
+      {
+        address: lpAddressFromCore as Address,
+        abi: UNIV2_PAIR_ABI,
+        functionName: "token0",
+        chainId: DEFAULT_CHAIN_ID,
+      },
+      {
+        address: lpAddressFromCore as Address,
+        abi: UNIV2_PAIR_ABI,
+        functionName: "token1",
+        chainId: DEFAULT_CHAIN_ID,
+      },
+      {
+        address: lpAddressFromCore as Address,
+        abi: UNIV2_PAIR_ABI,
+        functionName: "getReserves",
+        chainId: DEFAULT_CHAIN_ID,
+      },
+      {
+        address: lpAddressFromCore as Address,
+        abi: UNIV2_PAIR_ABI,
+        functionName: "totalSupply",
+        chainId: DEFAULT_CHAIN_ID,
+      },
+    ] : [],
+    query: {
+      enabled: !!lpAddressFromCore,
+      refetchInterval: 30_000,
+    },
+  });
+
+  const lpToken0 = lpPairInfo?.[0]?.result as Address | undefined;
+  const lpToken1 = lpPairInfo?.[1]?.result as Address | undefined;
+  const lpReserves = lpPairInfo?.[2]?.result as [bigint, bigint, number] | undefined;
+  const lpTotalSupply = lpPairInfo?.[3]?.result as bigint | undefined;
+
+  // Determine which token is UNIT and which is DONUT
+  const isUnitToken0 = rigInfo?.unitAddress && lpToken0 &&
+    rigInfo.unitAddress.toLowerCase() === lpToken0.toLowerCase();
+  const unitReserve = lpReserves ? (isUnitToken0 ? lpReserves[0] : lpReserves[1]) : 0n;
+  const donutReserve = lpReserves ? (isUnitToken0 ? lpReserves[1] : lpReserves[0]) : 0n;
+
+  // Batched transaction for LP operations
+  const {
+    execute: executeLpBatch,
+    state: lpBatchState,
+    reset: resetLpBatch,
+  } = useBatchedTransaction();
+
+  // Batched transaction for auction operations
+  const {
+    execute: executeAuctionBatch,
+    state: auctionBatchState,
+    reset: resetAuctionBatch,
+  } = useBatchedTransaction();
+
   const refetchBalances = useCallback(() => {
     refetchEthBalance();
     refetchUnitBalance();
-  }, [refetchEthBalance, refetchUnitBalance]);
+    refetchDonutBalance();
+    refetchLpPairInfo();
+  }, [refetchEthBalance, refetchUnitBalance, refetchDonutBalance, refetchLpPairInfo]);
 
   // Swap tokens for trading
   const sellToken = tradeDirection === "buy" ? NATIVE_ETH_ADDRESS : (rigInfo?.unitAddress || "");
@@ -225,7 +306,7 @@ export default function RigDetailPage() {
     buyToken,
     sellAmount: tradeAmount || "0",
     sellTokenDecimals: sellDecimals,
-    enabled: mode === "trade" && !!rigInfo?.unitAddress && !!tradeAmount && parseFloat(tradeAmount) > 0,
+    enabled: showTradeModal && !!rigInfo?.unitAddress && !!tradeAmount && parseFloat(tradeAmount) > 0,
   });
 
   // Calculate output amount and price impact for auto slippage
@@ -268,7 +349,7 @@ export default function RigDetailPage() {
     sellTokenDecimals: sellDecimals,
     taker: address,
     slippageBps: Math.round(slippage * 100),
-    enabled: mode === "trade" && !!rigInfo?.unitAddress && !!tradeAmount && parseFloat(tradeAmount) > 0 && !!address,
+    enabled: showTradeModal && !!rigInfo?.unitAddress && !!tradeAmount && parseFloat(tradeAmount) > 0 && !!address,
   });
 
 
@@ -537,6 +618,182 @@ export default function RigDetailPage() {
     }
   }, [batchState, resetBatch, refetchBalances, refetchRigState]);
 
+  // Liquidity result state
+  const [lpResult, setLpResult] = useState<"success" | "failure" | null>(null);
+  const lpResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auction result state
+  const [auctionResult, setAuctionResult] = useState<"success" | "failure" | null>(null);
+  const auctionResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Handle LP batch transaction result
+  useEffect(() => {
+    if (lpBatchState === "success") {
+      setLiquidityAmount("");
+      resetLpBatch();
+      refetchBalances();
+      refetchRigState();
+      setTimeout(() => {
+        refetchBalances();
+        refetchRigState();
+      }, 2000);
+      if (lpResultTimeoutRef.current) clearTimeout(lpResultTimeoutRef.current);
+      setLpResult("success");
+      lpResultTimeoutRef.current = setTimeout(() => {
+        setLpResult(null);
+        lpResultTimeoutRef.current = null;
+      }, 3000);
+    } else if (lpBatchState === "error") {
+      resetLpBatch();
+      if (lpResultTimeoutRef.current) clearTimeout(lpResultTimeoutRef.current);
+      setLpResult("failure");
+      lpResultTimeoutRef.current = setTimeout(() => {
+        setLpResult(null);
+        lpResultTimeoutRef.current = null;
+      }, 3000);
+    }
+  }, [lpBatchState, resetLpBatch, refetchBalances, refetchRigState]);
+
+  // Handle auction batch transaction result
+  useEffect(() => {
+    if (auctionBatchState === "success") {
+      resetAuctionBatch();
+      refetchBalances();
+      refetchAuctionState();
+      setTimeout(() => {
+        refetchBalances();
+        refetchAuctionState();
+      }, 2000);
+      if (auctionResultTimeoutRef.current) clearTimeout(auctionResultTimeoutRef.current);
+      setAuctionResult("success");
+      auctionResultTimeoutRef.current = setTimeout(() => {
+        setAuctionResult(null);
+        auctionResultTimeoutRef.current = null;
+      }, 3000);
+    } else if (auctionBatchState === "error") {
+      resetAuctionBatch();
+      if (auctionResultTimeoutRef.current) clearTimeout(auctionResultTimeoutRef.current);
+      setAuctionResult("failure");
+      auctionResultTimeoutRef.current = setTimeout(() => {
+        setAuctionResult(null);
+        auctionResultTimeoutRef.current = null;
+      }, 3000);
+    }
+  }, [auctionBatchState, resetAuctionBatch, refetchBalances, refetchAuctionState]);
+
+  // Liquidity calculations
+  const parsedLiquidityAmount = useMemo(() => {
+    if (!liquidityAmount || isNaN(Number(liquidityAmount))) return 0n;
+    try {
+      return parseEther(liquidityAmount);
+    } catch {
+      return 0n;
+    }
+  }, [liquidityAmount]);
+
+  const requiredDonutForLp = useMemo(() => {
+    if (parsedLiquidityAmount === 0n || unitReserve === 0n || donutReserve === 0n) return 0n;
+    // DONUT needed = (UNIT amount * DONUT reserve) / UNIT reserve
+    // Add 0.5% buffer for slippage
+    const exactDonut = (parsedLiquidityAmount * donutReserve) / unitReserve;
+    return (exactDonut * 1005n) / 1000n;
+  }, [parsedLiquidityAmount, unitReserve, donutReserve]);
+
+  const estimatedLpTokens = useMemo(() => {
+    if (parsedLiquidityAmount === 0n || unitReserve === 0n || !lpTotalSupply) return 0n;
+    return (parsedLiquidityAmount * lpTotalSupply) / unitReserve;
+  }, [parsedLiquidityAmount, unitReserve, lpTotalSupply]);
+
+  // Handle add liquidity
+  const handleAddLiquidity = useCallback(async () => {
+    if (!address || !rigInfo?.unitAddress || !lpAddressFromCore || parsedLiquidityAmount === 0n || requiredDonutForLp === 0n) {
+      return;
+    }
+
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + DEADLINE_BUFFER_SECONDS);
+
+    // Calculate min amounts with 1% slippage tolerance
+    const minUnitAmount = (parsedLiquidityAmount * 99n) / 100n;
+    const minDonutAmount = (requiredDonutForLp * 99n) / 100n;
+
+    // Build batched calls: approve UNIT + approve DONUT + addLiquidity
+    const approveUnitCall = encodeApproveCall(
+      rigInfo.unitAddress as Address,
+      CONTRACT_ADDRESSES.uniV2Router as Address,
+      parsedLiquidityAmount
+    );
+
+    const approveDonutCall = encodeApproveCall(
+      CONTRACT_ADDRESSES.donut as Address,
+      CONTRACT_ADDRESSES.uniV2Router as Address,
+      requiredDonutForLp
+    );
+
+    const addLiquidityCall = encodeContractCall(
+      CONTRACT_ADDRESSES.uniV2Router as Address,
+      UNIV2_ROUTER_ABI,
+      "addLiquidity",
+      [
+        rigInfo.unitAddress, // tokenA (UNIT)
+        CONTRACT_ADDRESSES.donut, // tokenB (DONUT)
+        parsedLiquidityAmount, // amountADesired
+        requiredDonutForLp, // amountBDesired
+        minUnitAmount, // amountAMin
+        minDonutAmount, // amountBMin
+        address, // to (LP tokens go to user)
+        deadline, // deadline
+      ]
+    );
+
+    try {
+      await executeLpBatch([approveUnitCall, approveDonutCall, addLiquidityCall]);
+    } catch (error) {
+      console.error("LP creation failed:", error);
+      resetLpBatch();
+    }
+  }, [
+    address,
+    rigInfo?.unitAddress,
+    lpAddressFromCore,
+    parsedLiquidityAmount,
+    requiredDonutForLp,
+    executeLpBatch,
+    resetLpBatch,
+  ]);
+
+  // Handle auction buy
+  const handleAuctionBuy = useCallback(async () => {
+    if (!address || !auctionState) return;
+
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + DEADLINE_BUFFER_SECONDS);
+
+    // Build batched calls: approve LP + buy
+    const approveCall = encodeApproveCall(
+      auctionState.paymentToken,
+      CONTRACT_ADDRESSES.multicall as Address,
+      auctionState.price
+    );
+
+    const buyCall = encodeContractCall(
+      CONTRACT_ADDRESSES.multicall as Address,
+      MULTICALL_ABI,
+      "buy",
+      [
+        rigAddress,
+        auctionState.epochId,
+        deadline,
+        auctionState.price,
+      ]
+    );
+
+    try {
+      await executeAuctionBatch([approveCall, buyCall]);
+    } catch (error) {
+      console.error("Auction buy failed:", error);
+      resetAuctionBatch();
+    }
+  }, [address, auctionState, rigAddress, executeAuctionBatch, resetAuctionBatch]);
+
   // Trade calculations
   const tradeBalance = tradeDirection === "buy" ? ethBalanceData : unitBalanceData;
   const tradeOutputAmount = tradePriceQuote?.buyAmount
@@ -719,7 +976,7 @@ export default function RigDetailPage() {
 
   if (isPageLoading) {
     return (
-      <main className="flex h-screen w-screen justify-center overflow-hidden bg-background text-foreground">
+      <main className="flex h-screen w-screen justify-center overflow-hidden bg-zinc-800 text-foreground">
         <div
           className="relative flex h-full w-full max-w-[520px] flex-1 flex-col overflow-hidden bg-background"
           style={{
@@ -733,7 +990,7 @@ export default function RigDetailPage() {
   }
 
   return (
-    <main className="flex h-screen w-screen justify-center overflow-hidden bg-background text-foreground">
+    <main className="flex h-screen w-screen justify-center overflow-hidden bg-zinc-800 text-foreground">
       <div
         className="relative flex h-full w-full max-w-[520px] flex-1 flex-col overflow-hidden bg-background"
         style={{
@@ -1077,22 +1334,24 @@ export default function RigDetailPage() {
             </div>
           </div>
 
-          {/* Spacer for bottom bar - taller in trade mode */}
-          <div className={mode === "trade" ? "h-96" : "h-32"} />
+          {/* Spacer for bottom bar */}
+          <div className="h-32" />
         </div>
 
         {/* Darkened overlay when menu is open */}
         {showActionMenu && (
           <div
-            className="fixed inset-0 bg-black/70 z-40"
+            className="fixed inset-0 z-40 flex justify-center"
             style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}
             onClick={() => setShowActionMenu(false)}
-          />
+          >
+            <div className="w-full max-w-[520px] bg-black/70" />
+          </div>
         )}
 
         {/* Bottom Action Bar */}
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-background flex justify-center" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}>
-          <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3">
+        <div className="fixed bottom-0 left-0 right-0 z-50 bg-zinc-800 flex justify-center" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}>
+          <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3 bg-background">
             <div>
               <div className="text-muted-foreground text-[12px]">Market Cap</div>
               <div className="font-semibold text-[17px] tabular-nums">
@@ -1195,6 +1454,16 @@ export default function RigDetailPage() {
 
             {/* Content */}
             <div className="flex-1 min-h-0 flex flex-col px-4">
+              {/* Title */}
+              <div className="mt-4 mb-6">
+                <h1 className="text-2xl font-semibold tracking-tight">
+                  Mine {tokenSymbol}
+                </h1>
+                <p className="text-[13px] text-zinc-500 mt-1">
+                  Ξ{ethBalance.toFixed(4)} available
+                </p>
+              </div>
+
               {/* Miner Info */}
               {hasMiner && (
                 <div className="flex-1 flex flex-col">
@@ -1314,8 +1583,8 @@ export default function RigDetailPage() {
             </div>
 
             {/* Bottom Action Bar */}
-            <div className="fixed bottom-0 left-0 right-0 z-50 bg-background flex justify-center" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}>
-              <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3">
+            <div className="fixed bottom-0 left-0 right-0 z-50 bg-zinc-800 flex justify-center" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}>
+              <div className="flex items-center justify-between w-full max-w-[520px] px-4 py-3 bg-background">
                 <div className="flex items-center gap-6">
                   <div>
                     <div className="text-muted-foreground text-[12px]">Mine Price</div>
@@ -1391,7 +1660,7 @@ export default function RigDetailPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-[13px] text-muted-foreground">Amount</span>
                   <span className="text-lg font-semibold tabular-nums">
-                    {tradeDirection === "buy" ? `Ξ${tradeAmount || "0"}` : (tradeAmount || "0")}
+                    {tradeDirection === "buy" ? `Ξ${tradeAmount || "0"}` : `${tradeAmount || "0"} ${tokenSymbol}`}
                   </span>
                 </div>
               </div>
@@ -1419,7 +1688,7 @@ export default function RigDetailPage() {
                       </span>
                     ) : (
                       <span className="text-[13px] font-medium tabular-nums">
-                        {formattedTradeOutput} {tradeDirection === "buy" ? tokenSymbol : "ETH"}
+                        {tradeDirection === "sell" ? "Ξ" : ""}{formattedTradeOutput} {tradeDirection === "buy" ? tokenSymbol : ""}
                       </span>
                     )}
                   </div>
@@ -1431,10 +1700,21 @@ export default function RigDetailPage() {
                 <span>{tradeAmount && parseFloat(tradeAmount) > 0 ? (priceImpact?.toFixed(1) ?? "0") : "0"}% impact</span>
                 <span>·</span>
                 <span>
-                  {tradePriceQuote?.buyAmount
-                    ? (parseFloat(formatBuyAmount(tradePriceQuote.buyAmount, 18)) * (1 - slippage / 100)).toLocaleString(undefined, { maximumFractionDigits: 6 })
-                    : "0"
-                  } {tradeDirection === "buy" ? tokenSymbol : "ETH"} min
+                  {tradeDirection === "buy" ? (
+                    <>
+                      {tradePriceQuote?.buyAmount
+                        ? (parseFloat(formatBuyAmount(tradePriceQuote.buyAmount, 18)) * (1 - slippage / 100)).toLocaleString(undefined, { maximumFractionDigits: 6 })
+                        : "0"
+                      } {tokenSymbol} min
+                    </>
+                  ) : (
+                    <>
+                      Ξ{tradePriceQuote?.buyAmount
+                        ? (parseFloat(formatBuyAmount(tradePriceQuote.buyAmount, 18)) * (1 - slippage / 100)).toLocaleString(undefined, { maximumFractionDigits: 6 })
+                        : "0"
+                      } min
+                    </>
+                  )}
                 </span>
               </div>
 
@@ -1512,12 +1792,35 @@ export default function RigDetailPage() {
 
       {/* Auction Modal */}
       {showAuctionModal && (() => {
-        // Auction calculations - placeholder values for now
-        const lpBalance = 0; // TODO: fetch user's LP balance
-        const lpPrice = 0.00007; // Price per LP token in USD
-        const usdcReward = 2.67; // USDC reward amount
-        const lpValueUsd = lpBalance * lpPrice;
-        const profitUsd = usdcReward - lpValueUsd;
+        // Auction calculations from contract state
+        const lpBalance = auctionState?.paymentTokenBalance
+          ? Number(formatEther(auctionState.paymentTokenBalance))
+          : 0;
+        const auctionPrice = auctionState?.price
+          ? Number(formatEther(auctionState.price))
+          : 0;
+        const wethReward = auctionState?.wethAccumulated
+          ? Number(formatEther(auctionState.wethAccumulated))
+          : 0;
+        const lpTokenPrice = auctionState?.paymentTokenPrice
+          ? Number(formatEther(auctionState.paymentTokenPrice))
+          : 0;
+
+        // Calculate USD values
+        const lpCostUsd = auctionPrice * lpTokenPrice * donutUsdPrice;
+        const wethRewardUsd = wethReward * ethUsdPrice;
+        const profitUsd = wethRewardUsd - lpCostUsd;
+        const isBuyingAuction = auctionBatchState === "pending" || auctionBatchState === "confirming";
+        const canBuy = lpBalance >= auctionPrice && auctionPrice > 0 && !isBuyingAuction && auctionResult === null;
+
+        // Button text
+        const auctionButtonText = (() => {
+          if (auctionResult === "success") return "Bought!";
+          if (auctionResult === "failure") return "Failed";
+          if (isBuyingAuction) return auctionBatchState === "confirming" ? "Confirming..." : "Buying...";
+          if (lpBalance < auctionPrice && auctionPrice > 0) return "Insufficient LP";
+          return "Buy WETH";
+        })();
 
         return (
           <div className="fixed inset-0 z-[100] flex h-screen w-screen justify-center bg-zinc-800">
@@ -1543,9 +1846,9 @@ export default function RigDetailPage() {
               <div className="flex-1 flex flex-col px-4">
                 {/* Title */}
                 <div className="mt-4 mb-6">
-                  <h1 className="text-2xl font-semibold tracking-tight">Buy USDC</h1>
+                  <h1 className="text-2xl font-semibold tracking-tight">Buy WETH</h1>
                   <p className="text-[13px] text-muted-foreground mt-1">
-                    {lpBalance.toFixed(3)} {tokenSymbol}-DONUT LP available
+                    {lpBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tokenSymbol}-DONUT LP available
                   </p>
                 </div>
 
@@ -1554,13 +1857,13 @@ export default function RigDetailPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-[13px] text-muted-foreground">You pay</span>
                     <span className="text-lg font-semibold tabular-nums">
-                      {lpBalance.toFixed(3)} LP
+                      {auctionPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} LP
                     </span>
                   </div>
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-[11px] text-muted-foreground">{tokenSymbol}-DONUT LP</span>
                     <span className="text-[11px] text-muted-foreground tabular-nums">
-                      ~${lpValueUsd.toFixed(2)}
+                      ~${lpCostUsd.toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -1570,12 +1873,14 @@ export default function RigDetailPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-[13px] text-muted-foreground">You receive</span>
                     <span className="text-lg font-semibold tabular-nums">
-                      ${usdcReward.toFixed(2)}
+                      Ξ{wethReward.toFixed(6)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between mt-1">
-                    <span className="text-[11px] text-muted-foreground">USDC</span>
-                    <span className="text-[11px] text-muted-foreground"></span>
+                    <span className="text-[11px] text-muted-foreground">WETH</span>
+                    <span className="text-[11px] text-muted-foreground tabular-nums">
+                      ~${wethRewardUsd.toFixed(2)}
+                    </span>
                   </div>
                 </div>
 
@@ -1600,14 +1905,18 @@ export default function RigDetailPage() {
                   style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}
                 >
                   <button
-                    disabled={lpBalance === 0}
-                    className={`w-full h-11 rounded-xl font-semibold text-[14px] transition-all ${
-                      lpBalance > 0
-                        ? "bg-white text-black hover:bg-zinc-200"
-                        : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-                    }`}
+                    onClick={handleAuctionBuy}
+                    disabled={!canBuy}
+                    className={cn(
+                      "w-full h-11 rounded-xl font-semibold text-[14px] transition-all",
+                      auctionResult === "success"
+                        ? "bg-green-500 text-black"
+                        : canBuy
+                          ? "bg-white text-black hover:bg-zinc-200"
+                          : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                    )}
                   >
-                    Sell LP
+                    {auctionButtonText}
                   </button>
                 </div>
               </div>
@@ -1619,21 +1928,30 @@ export default function RigDetailPage() {
 
       {/* Liquidity Modal */}
       {showLiquidityModal && (() => {
-        // Liquidity calculations
+        // Use actual balances and calculations
         const tokenBalance = unitBalance;
-        const donutBalance = 0; // TODO: fetch user's DONUT balance
-        const tokenPriceForLp = displayPriceUsd;
-        const donutPriceForLp = donutUsdPrice;
+        const donutBalance = donutBalanceData ? Number(formatEther(donutBalanceData.value)) : 0;
 
         const tokenInputAmount = parseFloat(liquidityAmount) || 0;
-        // Required DONUT is calculated based on token amount and price ratio
-        const requiredDonut = donutPriceForLp > 0 ? (tokenInputAmount * tokenPriceForLp) / donutPriceForLp : 0;
-        // LP tokens received (simplified calculation)
-        const lpTokensReceived = Math.sqrt(tokenInputAmount * requiredDonut);
+        // Required DONUT is calculated from reserves (already computed above)
+        const requiredDonut = requiredDonutForLp > 0n ? Number(formatEther(requiredDonutForLp)) : 0;
+        // Estimated LP tokens (already computed above)
+        const lpTokensReceived = estimatedLpTokens > 0n ? Number(formatEther(estimatedLpTokens)) : 0;
 
-        const hasEnoughToken = tokenInputAmount <= tokenBalance;
-        const hasEnoughDonut = requiredDonut <= donutBalance;
-        const canCreateLp = tokenInputAmount > 0 && hasEnoughToken && hasEnoughDonut;
+        const hasEnoughToken = parsedLiquidityAmount > 0n && (unitBalanceData?.value ?? 0n) >= parsedLiquidityAmount;
+        const hasEnoughDonut = requiredDonutForLp > 0n && (donutBalanceData?.value ?? 0n) >= requiredDonutForLp;
+        const isCreatingLp = lpBatchState === "pending" || lpBatchState === "confirming";
+        const canCreateLp = tokenInputAmount > 0 && hasEnoughToken && hasEnoughDonut && !isCreatingLp && lpResult === null;
+
+        // Button text
+        const lpButtonText = (() => {
+          if (lpResult === "success") return "LP Created!";
+          if (lpResult === "failure") return "Failed";
+          if (isCreatingLp) return lpBatchState === "confirming" ? "Confirming..." : "Creating LP...";
+          if (!hasEnoughToken && tokenInputAmount > 0) return "Insufficient " + tokenSymbol;
+          if (!hasEnoughDonut && tokenInputAmount > 0) return "Insufficient DONUT";
+          return "Create LP";
+        })();
 
         return (
           <div className="fixed inset-0 z-[100] flex h-screen w-screen justify-center bg-zinc-800">
@@ -1673,10 +1991,10 @@ export default function RigDetailPage() {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[13px] text-muted-foreground">You provide</span>
                     <button
-                      onClick={() => setLiquidityAmount(tokenBalance.toString())}
+                      onClick={() => setLiquidityAmount(tokenBalance.toFixed(2))}
                       className="text-[11px] text-muted-foreground hover:text-zinc-300 transition-colors"
                     >
-                      Balance: {tokenBalance.toLocaleString()}
+                      Balance: {tokenBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
@@ -1702,13 +2020,16 @@ export default function RigDetailPage() {
                     <span className="text-[13px] text-muted-foreground">Required DONUT</span>
                     <button
                       onClick={() => {
-                        // Calculate max token amount based on donut balance
-                        const maxTokenFromDonut = donutPriceForLp > 0 ? (donutBalance * donutPriceForLp) / tokenPriceForLp : 0;
-                        setLiquidityAmount(Math.min(tokenBalance, maxTokenFromDonut).toFixed(2));
+                        // Calculate max token amount based on donut balance using reserves ratio
+                        if (donutReserve > 0n && unitReserve > 0n && donutBalanceData?.value) {
+                          const maxUnitFromDonut = (donutBalanceData.value * unitReserve) / donutReserve;
+                          const maxUnitNumber = Number(formatEther(maxUnitFromDonut));
+                          setLiquidityAmount(Math.min(tokenBalance, maxUnitNumber).toFixed(2));
+                        }
                       }}
                       className="text-[11px] text-muted-foreground hover:text-zinc-300 transition-colors"
                     >
-                      Balance: {donutBalance.toLocaleString()}
+                      Balance: {donutBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
@@ -1716,8 +2037,8 @@ export default function RigDetailPage() {
                       {requiredDonut.toFixed(2)}
                     </span>
                     <div className="flex items-center gap-2 bg-zinc-800 rounded-full px-3 py-1.5">
-                      <div className="w-5 h-5 rounded-full bg-zinc-600 flex items-center justify-center text-[10px] font-semibold">
-                        D
+                      <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center">
+                        <div className="w-1.5 h-1.5 rounded-full bg-black" />
                       </div>
                       <span className="text-sm font-medium">DONUT</span>
                     </div>
@@ -1727,7 +2048,7 @@ export default function RigDetailPage() {
                 {/* LP Output */}
                 <div className="flex items-center justify-end gap-3 py-3 text-[11px] text-muted-foreground">
                   <span className="tabular-nums">
-                    You receive ~ {lpTokensReceived.toFixed(2)} LP tokens
+                    You receive ~ {lpTokensReceived.toFixed(4)} LP tokens
                   </span>
                 </div>
 
@@ -1736,14 +2057,18 @@ export default function RigDetailPage() {
 
                 {/* Action button */}
                 <button
+                  onClick={handleAddLiquidity}
                   disabled={!canCreateLp}
-                  className={`w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-4 ${
-                    canCreateLp
-                      ? "bg-white text-black hover:bg-zinc-200"
-                      : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-                  }`}
+                  className={cn(
+                    "w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-4",
+                    lpResult === "success"
+                      ? "bg-green-500 text-black"
+                      : canCreateLp
+                        ? "bg-white text-black hover:bg-zinc-200"
+                        : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                  )}
                 >
-                  {!hasEnoughDonut && tokenInputAmount > 0 ? "Insufficient DONUT" : "Create LP"}
+                  {lpButtonText}
                 </button>
 
                 {/* Number pad */}
