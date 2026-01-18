@@ -79,9 +79,6 @@ function MinedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserRigData; donutUs
   const unitPriceDonut = rig.unitPrice ? Number(formatEther(rig.unitPrice)) : 0;
   const valueUsd = minedAmount * unitPriceDonut * donutUsdPrice;
 
-  // Calculate PnL in ETH
-  const pnlEth = Number(formatEther(rig.userEarned - rig.userSpent));
-
   return (
     <Link
       href={`/rig/${rig.address}`}
@@ -101,8 +98,8 @@ function MinedRigRow({ rig, donutUsdPrice, isLast }: { rig: UserRigData; donutUs
         <div className="font-medium text-[15px] tabular-nums">
           {formatCurrency(valueUsd)}
         </div>
-        <div className={`text-[13px] tabular-nums ${pnlEth >= 0 ? "text-zinc-400" : "text-zinc-500"}`}>
-          {pnlEth >= 0 ? "+" : ""}{pnlEth.toFixed(4)} ETH
+        <div className="text-[13px] tabular-nums text-muted-foreground">
+          {formatAmount(minedAmount)} {rig.tokenSymbol}
         </div>
       </div>
     </Link>
