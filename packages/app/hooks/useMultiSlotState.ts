@@ -86,7 +86,7 @@ export function useMultiSlotState(
         ups: state.ups,
         nextUps: state.nextUps,
         miner: state.miner,
-        slotUri: state.slotUri,
+        slotUri: state.rigUri,
         unitPrice: state.unitPrice,
         isAvailable,
       };
