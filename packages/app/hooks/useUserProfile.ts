@@ -22,6 +22,7 @@ export type UserRigData = {
   rigUri: string;
   miner: `0x${string}`;
   price: bigint;
+  unitPrice: bigint;
   totalMinted: bigint;
   userMined: bigint;
   userSpent: bigint;
@@ -125,6 +126,7 @@ export function useUserProfile(accountAddress: `0x${string}` | undefined) {
       rigUri: state?.rigUri ?? "",
       miner: state?.miner ?? zeroAddress,
       price: state?.price ?? 0n,
+      unitPrice: state?.unitPrice ?? 0n,
       totalMinted: subgraphRig ? BigInt(Math.floor(parseFloat(subgraphRig.minted) * 1e18)) : 0n,
       userMined: BigInt(Math.floor(parseFloat(ra.mined) * 1e18)),
       userSpent: BigInt(Math.floor(parseFloat(ra.spent) * 1e18)),
