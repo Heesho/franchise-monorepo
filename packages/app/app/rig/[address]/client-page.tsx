@@ -1771,7 +1771,7 @@ export default function RigDetailPage() {
             </div>
 
             {/* Bottom section: Number pad + Button */}
-            <div className="px-4 pb-4 mt-auto" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}>
+            <div className="px-4 pb-4 mt-auto">
               {/* Trade Button */}
               <button
                 onClick={handleTrade}
@@ -2097,7 +2097,7 @@ export default function RigDetailPage() {
               </div>
 
               {/* Bottom section: Number pad + Button */}
-              <div className="px-4 pb-4 mt-auto" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}>
+              <div className="px-4 pb-4 mt-auto">
                 {/* Action button */}
                 <button
                   onClick={handleAddLiquidity}

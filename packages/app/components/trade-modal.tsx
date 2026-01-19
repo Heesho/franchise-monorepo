@@ -140,7 +140,7 @@ export function TradeModal({
         </div>
 
         {/* Content */}
-        <div className="flex-1 flex flex-col px-4">
+        <div className="flex-1 flex flex-col px-4 overflow-auto">
           {/* Title */}
           <div className="mt-4 mb-6">
             <h1 className="text-2xl font-semibold tracking-tight">
@@ -189,14 +189,17 @@ export function TradeModal({
               {isBuy ? `${formatCoin(minReceived)} ${tokenSymbol}` : `$${minReceived.toFixed(2)}`} min
             </span>
           </div>
+        </div>
 
-          {/* Spacer */}
-          <div className="flex-1" />
-
+        {/* Bottom section - Action button + Number pad */}
+        <div
+          className="absolute bottom-[70px] left-0 right-0 px-4 pt-2 bg-background"
+          style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+        >
           {/* Action button */}
           <button
             disabled={inputAmount === 0}
-            className={`w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-4 ${
+            className={`w-full h-11 rounded-xl font-semibold text-[14px] transition-all mb-2 ${
               inputAmount > 0
                 ? "bg-white text-black hover:bg-zinc-200"
                 : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
@@ -206,23 +209,18 @@ export function TradeModal({
           </button>
 
           {/* Number pad */}
-          <div
-            className="pb-4"
-            style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 70px)" }}
-          >
-            <div className="grid grid-cols-3 gap-2">
-              {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"].map(
-                (key) => (
-                  <NumPadButton key={key} value={key} onClick={handleNumPadPress}>
-                    {key === "backspace" ? (
-                      <Delete className="w-6 h-6" />
-                    ) : (
-                      key
-                    )}
-                  </NumPadButton>
-                )
-              )}
-            </div>
+          <div className="grid grid-cols-3 gap-2 pb-2">
+            {["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "backspace"].map(
+              (key) => (
+                <NumPadButton key={key} value={key} onClick={handleNumPadPress}>
+                  {key === "backspace" ? (
+                    <Delete className="w-6 h-6" />
+                  ) : (
+                    key
+                  )}
+                </NumPadButton>
+              )
+            )}
           </div>
         </div>
       </div>
