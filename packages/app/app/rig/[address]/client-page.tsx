@@ -120,6 +120,7 @@ export default function RigDetailPage() {
     priceSpent: string;
     message: string;
   } | null>(null);
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const priceRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -143,14 +144,14 @@ export default function RigDetailPage() {
   const { rigState, refetch: refetchRigState } = useRigState(rigAddress, address);
   const { rigInfo } = useRigInfo(rigAddress);
   const { auctionState, refetch: refetchAuctionState } = useAuctionState(rigAddress, address);
-  const { stats: userStats } = useUserRigStats(address, rigAddress);
+  const { stats: userStats, refetch: refetchUserStats } = useUserRigStats(address, rigAddress);
 
   // Mining price history for chart (from subgraph epochs, in USD)
   const { priceHistory, isLoading: isLoadingPrice, timeframeSeconds, tokenFirstActiveTime } = usePriceHistory(rigAddress, selectedTimeframe, ethUsdPrice);
 
   // DexScreener data for token price/market stats
   const { pairData, lpAddress } = useDexScreener(rigAddress, rigInfo?.unitAddress);
-  const { mines: mineHistory } = useMineHistory(rigAddress, 10);
+  const { mines: mineHistory, refetch: refetchMineHistory } = useMineHistory(rigAddress, 10);
 
   // Friend activity - get unique miner addresses and check for friends
   const minerAddresses = useMemo(() => {
@@ -408,17 +409,49 @@ export default function RigDetailPage() {
     return () => container.removeEventListener("scroll", handleScroll);
   }, [rigInfo, rigState]); // Re-run when data loads
 
-  // Handle receipt
+  // Handle receipt - immediately refetch all data sources after mining
   useEffect(() => {
     if (!receipt) return;
     if (receipt.status === "success" || receipt.status === "reverted") {
       showMineResult(receipt.status === "success" ? "success" : "failure");
-      refetchRigState();
-      if (receipt.status === "success") setCustomMessage("");
-      const resetTimer = setTimeout(() => resetWrite(), 500);
-      return () => clearTimeout(resetTimer);
+
+      if (receipt.status === "success") {
+        setCustomMessage("");
+
+        // Immediately refetch all data sources for fresh blockchain data
+        refetchRigState();
+        refetchMineHistory();
+        refetchUserStats();
+        refetchAuctionState();
+        refetchBalances();
+
+        // Do a few more quick refetches to ensure we get fresh data
+        // (blockchain state should be available immediately after tx confirms)
+        const quickRefetch1 = setTimeout(() => {
+          refetchRigState();
+          refetchBalances();
+        }, 500);
+
+        const quickRefetch2 = setTimeout(() => {
+          refetchRigState();
+          refetchMineHistory();
+          refetchUserStats();
+        }, 1500);
+
+        const resetTimer = setTimeout(() => resetWrite(), 500);
+        return () => {
+          clearTimeout(resetTimer);
+          clearTimeout(quickRefetch1);
+          clearTimeout(quickRefetch2);
+        };
+      } else {
+        // Failure case - just refetch
+        refetchRigState();
+        const resetTimer = setTimeout(() => resetWrite(), 500);
+        return () => clearTimeout(resetTimer);
+      }
     }
-  }, [receipt, refetchRigState, resetWrite, showMineResult]);
+  }, [receipt, refetchRigState, refetchMineHistory, refetchUserStats, refetchAuctionState, refetchBalances, resetWrite, showMineResult]);
 
   // Interpolated mining values
   const [interpolatedGlazed, setInterpolatedGlazed] = useState<bigint | null>(null);
